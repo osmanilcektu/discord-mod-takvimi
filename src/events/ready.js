@@ -1,16 +1,12 @@
+const { ActivityType, Events } = require('discord.js');
+
 module.exports = {
-    name: 'ready',
+    name: Events.ClientReady,
     once: true,
-    async execute(client) {
-        const logger = client.logger;
-        
-        logger.info(`✅ ${client.user.tag} olarak giriş yapıldı!`);
-        logger.info(`🌐 ${client.guilds.cache.size} sunucuda aktif`);
-        logger.info(`👥 ${client.guilds.cache.reduce((acc, guild) => acc + guild.memberCount, 0)} kullanıcıya hizmet veriyor`);
-        
-        // Bot durumunu ayarla
-        client.user.setActivity('Moderatör takvimini yönetiyor', { type: 'WATCHING' });
-        
-        logger.info('🤖 Bot tamamen hazır ve çalışıyor!');
+    async execute(readyClient, injectedClient) {
+        const client = injectedClient || readyClient;
+        client.user.setActivity('Moderatör vardiyalarını yönetiyor', { type: ActivityType.Watching });
+        client.logger.info(`✅ ${client.user.tag} olarak giriş yapıldı.`);
+        client.logger.info(`🌐 ${client.guilds.cache.size} sunucuda aktif.`);
     }
-}; 
+};

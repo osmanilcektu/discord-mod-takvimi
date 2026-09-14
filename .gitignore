@@ -146,4 +146,16 @@ Thumbs.db
 # Backup files
 *.bak
 *.backup
-*.old 
+*.old
+# SQLite database files (extra safety)
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Local environment variants
+.env.*
+!.env.example
+!config.example.env

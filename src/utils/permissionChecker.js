@@ -1,5 +1,19 @@
 const { PermissionFlagsBits, EmbedBuilder } = require('discord.js');
 
+const REQUIRED_GUILD_PERMISSIONS = [
+    PermissionFlagsBits.ViewChannel,
+    PermissionFlagsBits.SendMessages,
+    PermissionFlagsBits.EmbedLinks,
+    PermissionFlagsBits.AttachFiles
+];
+
+const PERMISSION_NAMES = new Map([
+    [PermissionFlagsBits.ViewChannel, 'Kanal Görüntüleme'],
+    [PermissionFlagsBits.SendMessages, 'Mesaj Gönderme'],
+    [PermissionFlagsBits.EmbedLinks, 'Embed Bağlantıları'],
+    [PermissionFlagsBits.AttachFiles, 'Dosya Ekleme']
+]);
+
 class PermissionChecker {
     constructor(client) {
         this.client = client;
@@ -7,236 +21,258 @@ class PermissionChecker {
         this.logger = client.logger;
     }
 
-    // Bot'un gerekli yetkilerini kontrol et
+    async getGuild() {
+        return this.client.guilds.cache.get(this.config.discord.guildId)
+            || this.client.guilds.fetch(this.config.discord.guildId).catch(() => null);
+    }
+
+    async getBotMember(guild) {
+        return guild.members.me || guild.members.fetchMe().catch(() => null);
+    }
+
+    async checkChannelPermissions(channelId, botMember, requiredPermissions) {
+        if (!channelId) {
+            return {
+                id: null,
+                exists: false,
+                missing: ['Kanal ID tanımlı değil']
+            };
+        }
+
+        const channel = this.client.channels.cache.get(channelId)
+            || await this.client.channels.fetch(channelId).catch(() => null);
+
+        if (!channel || !channel.isTextBased?.()) {
+            return {
+                id: channelId,
+                exists: false,
+                missing: ['Kanal bulunamadı veya metin kanalı değil']
+            };
+        }
+
+        const permissions = channel.permissionsFor?.(botMember);
+        if (!permissions) {
+            return {
+                id: channelId,
+                exists: true,
+                name: channel.name || channelId,
+                missing: ['Kanal yetkileri okunamadı']
+            };
+        }
+
+        const missing = requiredPermissions
+            .filter(permission => !permissions.has(permission))
+            .map(permission => PERMISSION_NAMES.get(permission) || String(permission));
+
+        return {
+            id: channelId,
+            exists: true,
+            name: channel.name || channelId,
+            missing
+        };
+    }
+
+    buildChannelRequirements() {
+        const basic = [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.EmbedLinks
+        ];
+
+        const withFiles = [
+            ...basic,
+            PermissionFlagsBits.AttachFiles
+        ];
+
+        const requirements = [
+            ['admin', this.config.discord.adminModChannelId, basic],
+            ['log', this.config.discord.logChannelId, basic],
+            ['schedule', this.config.discord.scheduleChannelId, withFiles]
+        ];
+
+        if (this.config.project.reportingEnabled) {
+            requirements.push(['report', this.config.project.reportChannelId, basic]);
+        }
+
+        if (this.config.project.updateCheckEnabled) {
+            requirements.push(['update', this.config.project.updateChannelId, basic]);
+        }
+
+        return requirements;
+    }
+
     async checkBotPermissions() {
         try {
-            const guild = this.client.guilds.cache.get(this.config.discord.guildId);
-            if (!guild) {
-                throw new Error('Guild bulunamadı!');
+            const guild = await this.getGuild();
+            if (!guild) throw new Error('Yapılandırılmış Discord sunucusu bulunamadı.');
+
+            const botMember = await this.getBotMember(guild);
+            if (!botMember) throw new Error('Bot üye bilgisi alınamadı.');
+
+            const missingPermissions = REQUIRED_GUILD_PERMISSIONS
+                .filter(permission => !botMember.permissions.has(permission))
+                .map(permission => PERMISSION_NAMES.get(permission));
+
+            const hasPermissions = REQUIRED_GUILD_PERMISSIONS
+                .filter(permission => botMember.permissions.has(permission))
+                .map(permission => PERMISSION_NAMES.get(permission));
+
+            const grouped = new Map();
+            for (const [purpose, channelId, required] of this.buildChannelRequirements()) {
+                const existing = grouped.get(channelId);
+                if (existing) {
+                    existing.purposes.push(purpose);
+                    for (const permission of required) existing.required.add(permission);
+                    continue;
+                }
+
+                grouped.set(channelId, {
+                    channelId,
+                    purposes: [purpose],
+                    required: new Set(required)
+                });
             }
 
-            const botMember = guild.members.cache.get(this.client.user.id);
-            if (!botMember) {
-                throw new Error('Bot üye bilgisi bulunamadı!');
-            }
+            const channels = {};
+            const channelProblems = [];
 
-            const requiredPermissions = [
-                PermissionFlagsBits.SendMessages,
-                PermissionFlagsBits.UseApplicationCommands,
-                PermissionFlagsBits.EmbedLinks,
-                PermissionFlagsBits.AttachFiles,
-                PermissionFlagsBits.ReadMessageHistory,
-                PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.BanMembers,
-                PermissionFlagsBits.ManageMessages
-            ];
+            for (const group of grouped.values()) {
+                const result = await this.checkChannelPermissions(
+                    group.channelId,
+                    botMember,
+                    [...group.required]
+                );
 
-            const missingPermissions = [];
-            const hasPermissions = [];
+                const key = group.purposes.join('+');
+                channels[key] = result;
 
-            for (const permission of requiredPermissions) {
-                if (botMember.permissions.has(permission)) {
-                    hasPermissions.push(this.getPermissionName(permission));
-                } else {
-                    missingPermissions.push(this.getPermissionName(permission));
+                if (!result.exists || result.missing.length > 0) {
+                    const channelLabel = result.name
+                        ? `#${result.name} (${result.id})`
+                        : String(result.id || 'tanımsız');
+                    channelProblems.push(
+                        `${group.purposes.join('/')} → ${channelLabel}: ${result.missing.join(', ')}`
+                    );
                 }
             }
 
-            // Admin kanalında özel yetki kontrolü
-            const adminChannel = guild.channels.cache.get(this.config.discord.adminModChannelId);
-            let adminChannelPerms = null;
-            
-            if (adminChannel) {
-                const channelPerms = adminChannel.permissionsFor(botMember);
-                adminChannelPerms = {
-                    canSend: channelPerms.has(PermissionFlagsBits.SendMessages),
-                    canEmbed: channelPerms.has(PermissionFlagsBits.EmbedLinks),
-                    canAttach: channelPerms.has(PermissionFlagsBits.AttachFiles),
-                    canView: channelPerms.has(PermissionFlagsBits.ViewChannel)
-                };
-            }
-
             const result = {
-                success: missingPermissions.length === 0,
+                success: channelProblems.length === 0,
                 hasPermissions,
                 missingPermissions,
-                adminChannelPerms,
+                channelProblems,
+                channels,
                 guild: guild.name,
                 botNickname: botMember.displayName
             };
 
-            this.logger.info(`Yetki kontrolü tamamlandı. Eksik: ${missingPermissions.length}, Mevcut: ${hasPermissions.length}`);
-            
+            this.logger.info(
+                `Yetki kontrolü tamamlandı. Genel eksik: ${missingPermissions.length}, kanal sorunu: ${channelProblems.length}`
+            );
             return result;
-
         } catch (error) {
             this.logger.botError(error, 'Bot yetki kontrolü');
             return {
                 success: false,
                 error: error.message,
                 hasPermissions: [],
-                missingPermissions: []
+                missingPermissions: [],
+                channelProblems: [],
+                channels: {}
             };
         }
     }
 
-    // Yetki adını al
-    getPermissionName(permission) {
-        const permissionNames = {
-            [PermissionFlagsBits.SendMessages]: 'Mesaj Gönderme',
-            [PermissionFlagsBits.UseApplicationCommands]: 'Slash Komut Kullanma',
-            [PermissionFlagsBits.EmbedLinks]: 'Embed Bağlantıları',
-            [PermissionFlagsBits.AttachFiles]: 'Dosya Ekleme',
-            [PermissionFlagsBits.ReadMessageHistory]: 'Mesaj Geçmişi Okuma',
-            [PermissionFlagsBits.ViewChannel]: 'Kanal Görüntüleme',
-            [PermissionFlagsBits.BanMembers]: 'Üye Yasaklama',
-            [PermissionFlagsBits.ManageMessages]: 'Mesaj Yönetimi'
-        };
-
-        return permissionNames[permission] || 'Bilinmeyen Yetki';
-    }
-
-    // Yetki raporu embed'i oluştur
-    createPermissionReport(permissionCheck) {
+    createPermissionReport(result) {
         const embed = new EmbedBuilder()
             .setTitle('🔐 Bot Yetki Durumu')
+            .setColor(result.success ? '#00aa55' : '#cc3333')
+            .setDescription(
+                result.success
+                    ? '✅ Yapılandırılmış kanallardaki etkin bot izinleri uygun.'
+                    : '❌ Düzeltilmesi gereken kanal erişimi veya etkin izin var.'
+            )
             .setTimestamp();
 
-        if (permissionCheck.success) {
-            embed.setColor('#00ff00')
-                .setDescription('✅ Bot tüm gerekli yetkilere sahip!')
-                .addFields({
-                    name: '✅ Mevcut Yetkiler',
-                    value: permissionCheck.hasPermissions.join('\n'),
-                    inline: false
-                });
-        } else {
-            embed.setColor('#ff0000')
-                .setDescription('❌ Bot bazı yetkilerden yoksun!')
-                .addFields(
-                    {
-                        name: '❌ Eksik Yetkiler',
-                        value: permissionCheck.missingPermissions.length > 0 
-                            ? permissionCheck.missingPermissions.join('\n')
-                            : 'Yok',
-                        inline: false
-                    },
-                    {
-                        name: '✅ Mevcut Yetkiler',
-                        value: permissionCheck.hasPermissions.length > 0 
-                            ? permissionCheck.hasPermissions.join('\n')
-                            : 'Yok',
-                        inline: false
-                    }
-                );
-        }
-
-        // Admin kanal yetkilerini ekle
-        if (permissionCheck.adminChannelPerms) {
-            const channelStatus = [];
-            if (permissionCheck.adminChannelPerms.canView) channelStatus.push('✅ Kanal Görme');
-            else channelStatus.push('❌ Kanal Görme');
-            
-            if (permissionCheck.adminChannelPerms.canSend) channelStatus.push('✅ Mesaj Gönderme');
-            else channelStatus.push('❌ Mesaj Gönderme');
-            
-            if (permissionCheck.adminChannelPerms.canEmbed) channelStatus.push('✅ Embed Gönderme');
-            else channelStatus.push('❌ Embed Gönderme');
-
+        if (result.error) {
             embed.addFields({
-                name: '📢 Admin Kanal Yetkiler',
-                value: channelStatus.join('\n'),
-                inline: false
+                name: 'Hata',
+                value: result.error.slice(0, 1024)
             });
+            return embed;
         }
 
-        // Genel bilgiler
         embed.addFields({
-            name: '📊 Bot Bilgileri',
-            value: [
-                `**Sunucu:** ${permissionCheck.guild || 'Bilinmiyor'}`,
-                `**Bot Adı:** ${permissionCheck.botNickname || this.client.user.username}`,
-                `**Kontrol Zamanı:** ${new Date().toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' })}`
-            ].join('\n'),
+            name: 'Sunucu',
+            value: `${result.guild || 'Bilinmiyor'}\nBot: ${result.botNickname || this.client.user?.username || 'Bilinmiyor'}`,
             inline: false
         });
 
-        if (!permissionCheck.success && permissionCheck.missingPermissions.length > 0) {
+        if (result.hasPermissions.length > 0) {
             embed.addFields({
-                name: '🛠️ Çözüm',
-                value: 'Bot\'a eksik yetkiler verilmelidir. Sunucu ayarlarından bot rolüne gerekli izinleri ekleyin.',
-                inline: false
+                name: '✅ Mevcut temel yetkiler',
+                value: result.hasPermissions.join('\n').slice(0, 1024)
+            });
+        }
+
+        if (result.missingPermissions.length > 0) {
+            embed.addFields({
+                name: 'ℹ️ Sunucu tabanında eksik izinler',
+                value: `${result.missingPermissions.join('\n')}\n\nKanal izinleri/overwrite bu eksikleri telafi edebilir; başarı durumu etkin kanal izinlerine göre hesaplanır.`.slice(0, 1024)
+            });
+        }
+
+        if (result.channelProblems.length > 0) {
+            embed.addFields({
+                name: '⚠️ Kanal erişimleri',
+                value: result.channelProblems.join('\n').slice(0, 1024)
             });
         }
 
         return embed;
     }
 
-    // Otomatik yetki uyarısı gönder
     async sendPermissionAlert() {
+        const result = await this.checkBotPermissions();
+        if (result.success || !this.client.isReady()) return result;
+
         try {
-            const permissionCheck = await this.checkBotPermissions();
-            
-            if (!permissionCheck.success) {
-                const adminChannel = this.client.channels.cache.get(this.config.discord.adminModChannelId);
-                
-                if (adminChannel && permissionCheck.adminChannelPerms?.canSend) {
-                    const embed = this.createPermissionReport(permissionCheck);
-                    
-                    await adminChannel.send({
-                        content: '⚠️ **DİKKAT: Bot Yetki Sorunu**',
-                        embeds: [embed]
-                    });
-                    
-                    this.logger.warn('Yetki uyarısı admin kanalına gönderildi');
-                } else {
-                    this.logger.error('Admin kanalına yetki uyarısı gönderilemedi - kanal erişim sorunu');
-                }
+            const channel = await this.client.channels.fetch(
+                this.config.discord.adminModChannelId
+            );
+
+            if (channel?.isTextBased?.()) {
+                await channel.send({
+                    content: '⚠️ **Bot yetki/kanal erişimi kontrolü başarısız.**',
+                    embeds: [this.createPermissionReport(result)]
+                });
             }
-
-            return permissionCheck;
-
         } catch (error) {
-            this.logger.botError(error, 'Yetki uyarısı gönderme');
-            return null;
+            this.logger.warn(`Yetki uyarısı gönderilemedi: ${error.message}`);
         }
+
+        return result;
     }
 
-    // Belirli bir yetki için kontrol
-    hasPermission(permission) {
-        try {
-            const guild = this.client.guilds.cache.get(this.config.discord.guildId);
-            if (!guild) return false;
-
-            const botMember = guild.members.cache.get(this.client.user.id);
-            if (!botMember) return false;
-
-            return botMember.permissions.has(permission);
-        } catch (error) {
-            this.logger.error('Yetki kontrolü hatası:', error.message);
-            return false;
-        }
+    async hasPermission(permission) {
+        const guild = await this.getGuild();
+        if (!guild) return false;
+        const botMember = await this.getBotMember(guild);
+        return Boolean(botMember?.permissions.has(permission));
     }
 
-    // Admin kanalı için özel yetki kontrolü
-    hasAdminChannelPermission(permission) {
-        try {
-            const guild = this.client.guilds.cache.get(this.config.discord.guildId);
-            if (!guild) return false;
+    async hasAdminChannelPermission(permission) {
+        const guild = await this.getGuild();
+        if (!guild) return false;
+        const botMember = await this.getBotMember(guild);
+        if (!botMember) return false;
 
-            const adminChannel = guild.channels.cache.get(this.config.discord.adminModChannelId);
-            if (!adminChannel) return false;
+        const channel = await this.client.channels.fetch(
+            this.config.discord.adminModChannelId
+        ).catch(() => null);
 
-            const botMember = guild.members.cache.get(this.client.user.id);
-            if (!botMember) return false;
-
-            const channelPerms = adminChannel.permissionsFor(botMember);
-            return channelPerms.has(permission);
-        } catch (error) {
-            this.logger.error('Admin kanal yetki kontrolü hatası:', error.message);
-            return false;
-        }
+        return Boolean(channel?.permissionsFor?.(botMember)?.has(permission));
     }
 }
 
-module.exports = PermissionChecker; 
+module.exports = PermissionChecker;

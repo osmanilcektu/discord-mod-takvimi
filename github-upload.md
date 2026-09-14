@@ -1,86 +1,66 @@
-# GitHub'a Proje Yükleme Rehberi
+# GitHub Yayın Rehberi
 
-## 🔧 Git Kurulumu Sonrası Komutlar
+Hedef repository: `https://github.com/osmanilcektu/discord-mod-takvimi`
 
-Git'i kurduktan sonra PowerShell'i yeniden başlatın ve aşağıdaki komutları sırasıyla çalıştırın:
+## Yayın öncesi zorunlu kontroller
 
-### 1. Git Yapılandırması
+Gerçek `.env`, `data/`, `logs/` ve `node_modules/` repository'ye eklenmemelidir. `package-lock.json` ise **commit edilmelidir**.
+
 ```powershell
-git config --global user.name "Adınız Soyadınız"
-git config --global user.email "email@example.com"
+npm install
+npm run setup -- --test
+npm run verify
+npm audit
+npm run doctor
 ```
 
-### 2. Git Repository Başlatma
+Canlı Discord testinde en az şunları kontrol edin:
+
+```text
+/yardim
+/mod
+/admin permissions
+/admin modlari-guncelle
+/admin mod-listesi
+/admin sistem-durumu
+/admin proje-istatistik
+/admin guncelleme-kontrol
+```
+
+`Unknown interaction`, deprecated `ephemeral`, `Missing Access`, `Used disallowed intents` veya kanal izin hatası kalmamalıdır.
+
+## Git kontrolü
+
 ```powershell
-git init
+git status --short
+git check-ignore -v .env
+git ls-files .env data logs node_modules
 ```
 
-### 3. .gitignore Kontrolü
-.gitignore dosyası zaten mevcut, hassas dosyaları koruyacak.
+Son komut hiçbir hassas/runtime dosyası göstermemelidir.
 
-### 4. Dosyaları Git'e Ekleme
-```powershell
-git add .
-```
+## Main branch'e gönderme
 
-### 5. İlk Commit
-```powershell
-git commit -m "İlk commit: Discord Moderatör Takvim Botu"
-```
-
-### 6. Ana Branch Ayarlama
-```powershell
-git branch -M main
-```
-
-### 7. GitHub Repository Bağlama
-GitHub'da oluşturduğunuz repository URL'ini kullanın:
-```powershell
-git remote add origin https://github.com/KULLANICI_ADINIZ/discord-mod-schedule-bot.git
-```
-
-### 8. GitHub'a Yükleme
-```powershell
-git push -u origin main
-```
-
-## 🔐 GitHub Token Gerekebilir
-
-Eğer şifre isterse:
-1. GitHub Settings > Developer settings > Personal access tokens > Tokens (classic)
-2. "Generate new token (classic)" 
-3. İzinleri seçin: repo, workflow
-4. Token'ı kopyalayın ve şifre yerine kullanın
-
-## 📁 Proje Yapısı
-
-Repository'nizde şu dosyalar olacak:
-```
-discord-mod-schedule-bot/
-├── src/
-│   ├── commands/
-│   ├── events/
-│   ├── utils/
-│   └── database/
-├── package.json
-├── README.md
-├── config.example.env
-├── .gitignore
-└── github-upload.md
-```
-
-## ✅ Kontrol
-
-Yükleme başarılı olduktan sonra:
-- GitHub repository sayfanızı yenileyin
-- Tüm dosyaların görünür olduğunu kontrol edin
-- README.md dosyasının düzgün görüntülendiğini doğrulayın
-
-## 🔄 Sonraki Güncellemeler İçin
-
-Değişiklik yaptığınızda:
 ```powershell
 git add .
-git commit -m "Değişiklik açıklaması"
-git push
-``` 
+git status --short
+git commit -m "Release v2.2.1: harden interactions and publishing"
+git push origin main
+```
+
+GitHub Actions `Node.js CI` iş akışının Node 20, 22 ve 24 üzerinde yeşil olduğunu doğrulayın. CI yeşil olmadan release etiketi oluşturmayın.
+
+## v2.2.1 release
+
+CI başarılı olduktan sonra:
+
+```powershell
+git tag -a v2.2.1 -m "v2.2.1"
+git push origin v2.2.1
+```
+
+`.github/workflows/release.yml` etiketi doğrular, temiz kurulum yapar, statik kontrolleri/testleri/güvenlik denetimini çalıştırır ve GitHub Release'e `discord-mod-takvimi-v2.2.1.zip` asset'ini ekler.
+
+## Kimlik doğrulama
+
+GitHub HTTPS push sırasında kimlik doğrulama isterse Git Credential Manager / tarayıcı tabanlı GitHub oturum açma akışını kullanın. Kişisel erişim anahtarlarını proje dosyalarına, `.env` içine veya komut geçmişine yazmayın.

@@ -1,783 +1,454 @@
-const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
+const AutoScheduleManager = require('../utils/autoScheduleManager');
+const SurveyManager = require('../utils/surveyManager');
+const PermissionChecker = require('../utils/permissionChecker');
 const SchedulePublisher = require('../utils/schedulePublisher');
-const DisciplineManager = require('../utils/disciplineManager');
+const { buildSlots } = require('../utils/slots');
+const { getLocalDateString, isValidDateString, parseClock } = require('../utils/dateTime');
+const appConfig = require('../utils/config');
+
+function slotChoices() {
+    return buildSlots(appConfig.timeSlots).map(slot => ({
+        name: `${slot.emoji} ${slot.name} (${slot.range})`.slice(0, 100),
+        value: slot.id
+    }));
+}
+
+function modRoleChoices() {
+    return appConfig.discord.modRoles.slice(0, 25).map(role => ({
+        name: role.slice(0, 100),
+        value: role.slice(0, 100)
+    }));
+}
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('admin')
-        .setDescription('Tüm admin komutları')
+        .setDescription('Moderatör takvimi yönetim komutları')
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('takvim-olustur')
-                .setDescription('Günlük takvim oluştur')
-                .addStringOption(option =>
-                    option.setName('tarih')
-                        .setDescription('Tarih (YYYY-MM-DD, boş bırakılırsa bugün)')
-                        .setRequired(false))
-        )
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('kullanici-izin')
-                .setDescription('Kullanıcıya özel izin/kısıtlama oluştur')
-                .addUserOption(option =>
-                    option.setName('kullanici')
-                        .setDescription('İzin verilecek/kısıtlanacak kullanıcı')
-                        .setRequired(true))
-                .addStringOption(option =>
-                    option.setName('baslangic')
-                        .setDescription('Başlangıç saati (HH:MM)')
-                        .setRequired(true))
-                .addStringOption(option =>
-                    option.setName('bitis')
-                        .setDescription('Bitiş saati (HH:MM)')
-                        .setRequired(true))
-                .addStringOption(option =>
-                    option.setName('tur')
-                        .setDescription('İzin türü')
-                        .setRequired(true)
-                        .addChoices(
-                            { name: '✅ İzin Ver (Bu saatlerde çalışabilir)', value: 'allow' },
-                            { name: '❌ Kısıtla (Bu saatlerde çalışamaz)', value: 'restrict' }
-                        ))
-                .addStringOption(option =>
-                    option.setName('aciklama')
-                        .setDescription('İzin/kısıtlama açıklaması')
-                        .setRequired(false))
-        )
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('kalici-saat')
-                .setDescription('Kullanıcıya kalıcı saat belirle (bot her zaman bu saate atar)')
-                .addUserOption(option =>
-                    option.setName('kullanici')
-                        .setDescription('Kalıcı saat atanacak kullanıcı')
-                        .setRequired(true))
-                .addStringOption(option =>
-                    option.setName('vardiya')
-                        .setDescription('Kalıcı vardiya seçimi')
-                        .setRequired(true)
-                        .addChoices(
-                            { name: '🌚 Vardiya 1 - Gece Yarısı (00:00-05:00)', value: 'slot1' },
-                            { name: '🌅 Vardiya 2 - Sabah (05:00-10:00)', value: 'slot2' },
-                            { name: '☀️ Vardiya 3 - Öğlen (10:00-15:00)', value: 'slot3' },
-                            { name: '🌤️ Vardiya 4 - Öğleden Sonra (15:00-20:00)', value: 'slot4' },
-                            { name: '🌆 Vardiya 5 - Akşam-Gece (20:00-00:00)', value: 'slot5' }
-                        ))
-                .addStringOption(option =>
-                    option.setName('aciklama')
-                        .setDescription('Kalıcı atama açıklaması')
-                        .setRequired(false))
-        )
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('saat-degistir')
-                .setDescription('Kullanıcının saatini değiştir (değişen kişiye mesaj gönderir)')
-                .addUserOption(option =>
-                    option.setName('kullanici')
-                        .setDescription('Saati değiştirilecek kullanıcı')
-                        .setRequired(true))
-                .addStringOption(option =>
-                    option.setName('yeni-vardiya')
-                        .setDescription('Yeni vardiya seçimi')
-                        .setRequired(true)
-                        .addChoices(
-                            { name: '🌚 Vardiya 1 - Gece Yarısı (00:00-05:00)', value: 'slot1' },
-                            { name: '🌅 Vardiya 2 - Sabah (05:00-10:00)', value: 'slot2' },
-                            { name: '☀️ Vardiya 3 - Öğlen (10:00-15:00)', value: 'slot3' },
-                            { name: '🌤️ Vardiya 4 - Öğleden Sonra (15:00-20:00)', value: 'slot4' },
-                            { name: '🌆 Vardiya 5 - Akşam-Gece (20:00-00:00)', value: 'slot5' }
-                        ))
-                .addStringOption(option =>
-                    option.setName('tarih')
-                        .setDescription('Değişiklik tarihi (YYYY-MM-DD, boş bırakılırsa bugün)')
-                        .setRequired(false))
-                .addStringOption(option =>
-                    option.setName('sebep')
-                        .setDescription('Değişiklik sebebi')
-                        .setRequired(false))
-        )
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('mod-ekle')
-                .setDescription('Sisteme yeni moderatör ekle')
-                .addUserOption(option =>
-                    option.setName('kullanici')
-                        .setDescription('Eklenecek moderatör')
-                        .setRequired(true))
-                .addStringOption(option =>
-                    option.setName('rol')
-                        .setDescription('Moderatör rolü')
-                        .setRequired(true)
-                        .addChoices(
-                            { name: '👮 Moderatör', value: 'MOD' },
-                            { name: '👮‍♂️ Senior Moderatör', value: 'SR MOD' },
-                            { name: '🛡️ Head Moderatör', value: 'HEAD MOD' }
-                        ))
-        )
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('modlari-guncelle')
-                .setDescription('Tüm moderatörleri tara ve güncelle')
-        )
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('takvim-gonder')
-                .setDescription('Moderatörlere takvim anketi gönder')
-                .addStringOption(option =>
-                    option.setName('period')
-                        .setDescription('Dönem (örn: 2025-W32)')
-                        .setRequired(false))
-        )
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('takvim-sil')
-                .setDescription('Belirtilen tarihin takvimini sil')
-                .addStringOption(option =>
-                    option.setName('tarih')
-                        .setDescription('Silinecek tarih (YYYY-MM-DD)')
-                        .setRequired(true))
-        )
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('cezali-listesi')
-                .setDescription('Cezalı kullanıcıları listele')
-        )
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('ban-kaldir')
-                .setDescription('Kullanıcının banını kaldır')
-                .addUserOption(option =>
-                    option.setName('kullanici')
-                        .setDescription('Banı kaldırılacak kullanıcı')
-                        .setRequired(true))
-        )
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('stats')
-                .setDescription('Bot istatistiklerini görüntüle')
-        )
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('permissions')
-                .setDescription('Bot yetkilerini kontrol et')
-        )
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('workload')
-                .setDescription('Moderatör çalışma yükü analizi (son 7 gün)')
-        ),
+        .addSubcommand(sub => sub
+            .setName('takvim-olustur')
+            .setDescription('Belirli tarih için günlük müsaitlik anketini başlatır')
+            .addStringOption(option => option.setName('tarih').setDescription('YYYY-MM-DD; boşsa bugün').setRequired(false)))
+        .addSubcommand(sub => sub
+            .setName('kullanici-izin')
+            .setDescription('Kullanıcıya saat bazlı izin/kısıtlama ekler')
+            .addUserOption(option => option.setName('kullanici').setDescription('Kullanıcı').setRequired(true))
+            .addStringOption(option => option.setName('baslangic').setDescription('HH:MM').setRequired(true))
+            .addStringOption(option => option.setName('bitis').setDescription('HH:MM veya 24:00').setRequired(true))
+            .addStringOption(option => option.setName('tur').setDescription('İzin türü').setRequired(true).addChoices(
+                { name: '✅ İzin ver', value: 'allow' },
+                { name: '❌ Kısıtla', value: 'restrict' }
+            ))
+            .addStringOption(option => option.setName('aciklama').setDescription('Açıklama').setRequired(false)))
+        .addSubcommand(sub => sub
+            .setName('kalici-saat')
+            .setDescription('Kullanıcıya kalıcı vardiya atar')
+            .addUserOption(option => option.setName('kullanici').setDescription('Kullanıcı').setRequired(true))
+            .addStringOption(option => option.setName('vardiya').setDescription('Vardiya').setRequired(true).addChoices(...slotChoices()))
+            .addStringOption(option => option.setName('aciklama').setDescription('Açıklama').setRequired(false)))
+        .addSubcommand(sub => sub
+            .setName('saat-degistir')
+            .setDescription('Kullanıcının atanmış vardiyasını değiştirir')
+            .addUserOption(option => option.setName('kullanici').setDescription('Kullanıcı').setRequired(true))
+            .addStringOption(option => option.setName('yeni-vardiya').setDescription('Yeni vardiya').setRequired(true).addChoices(...slotChoices()))
+            .addStringOption(option => option.setName('tarih').setDescription('YYYY-MM-DD; boşsa bugün').setRequired(false))
+            .addStringOption(option => option.setName('sebep').setDescription('Değişiklik sebebi').setRequired(false)))
+        .addSubcommand(sub => sub
+            .setName('mod-ekle')
+            .setDescription('Sisteme moderatör ekler')
+            .addUserOption(option => option.setName('kullanici').setDescription('Kullanıcı').setRequired(true))
+            .addStringOption(option => option.setName('rol').setDescription('Yapılandırılmış moderatör rolü').setRequired(true).addChoices(...modRoleChoices())))
+        .addSubcommand(sub => sub.setName('modlari-guncelle').setDescription('Sunucudaki moderatör rollerini yeniden tarar'))
+        .addSubcommand(sub => sub
+            .setName('takvim-gonder')
+            .setDescription('Haftalık müsaitlik anketini moderatörlere gönderir')
+            .addStringOption(option => option.setName('period').setDescription('Örn. 2026-W37').setRequired(false)))
+        .addSubcommand(sub => sub
+            .setName('takvim-yayinla')
+            .setDescription('Haftalık müsaitlik özetini takvim kanalında yayınlar')
+            .addStringOption(option => option.setName('period').setDescription('Örn. 2026-W37').setRequired(false)))
+        .addSubcommand(sub => sub
+            .setName('takvim-sil')
+            .setDescription('Belirtilen tarihin günlük vardiya takvimini siler')
+            .addStringOption(option => option.setName('tarih').setDescription('YYYY-MM-DD').setRequired(true)))
+        .addSubcommand(sub => sub.setName('cezali-listesi').setDescription('Aktif planlama cezası olan kullanıcıları listeler'))
+        .addSubcommand(sub => sub
+            .setName('ban-kaldir')
+            .setDescription('Kullanıcının aktif planlama cezasını kaldırır')
+            .addUserOption(option => option.setName('kullanici').setDescription('Kullanıcı').setRequired(true)))
+        .addSubcommand(sub => sub.setName('stats').setDescription('Bot istatistiklerini gösterir'))
+        .addSubcommand(sub => sub.setName('permissions').setDescription('Bot Discord yetkilerini kontrol eder'))
+        .addSubcommand(sub => sub.setName('workload').setDescription('Son 7 günlük moderatör iş yükünü gösterir'))
+        .addSubcommand(sub => sub.setName('sistem-durumu').setDescription('Ayrıntılı bot, scheduler ve güncelleme durumunu gösterir'))
+        .addSubcommand(sub => sub.setName('guncelleme-kontrol').setDescription('GitHub Releases üzerinden yeni sürüm kontrolü yapar'))
+        .addSubcommand(sub => sub.setName('proje-istatistik').setDescription('GitHub yıldız, fork, release ve indirme sayılarını gösterir'))
+        .addSubcommand(sub => sub.setName('rapor-gonder').setDescription('Operasyon raporunu yapılandırılmış özel kanala gönderir'))
+        .addSubcommand(sub => sub.setName('mod-listesi').setDescription('Aktif moderatörleri ve rollerini listeler')),
 
     async execute(interaction, client) {
+        if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+            await interaction.reply({ content: '❌ Bu komut için yönetici yetkisi gerekir.', flags: MessageFlags.Ephemeral });
+            return;
+        }
+
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const sub = interaction.options.getSubcommand();
+
         try {
-            const subcommand = interaction.options.getSubcommand();
-            const logger = client.logger;
-            const database = client.database;
-            const config = client.config;
+            const handlers = {
+                'takvim-olustur': this.handleCreateSchedule,
+                'kullanici-izin': this.handleUserPermission,
+                'kalici-saat': this.handlePermanentShift,
+                'saat-degistir': this.handleChangeShift,
+                'mod-ekle': this.handleAddMod,
+                'modlari-guncelle': this.handleUpdateMods,
+                'takvim-gonder': this.handleSendSurvey,
+                'takvim-yayinla': this.handlePublishSurvey,
+                'takvim-sil': this.handleDeleteSchedule,
+                'cezali-listesi': this.handlePunishedList,
+                'ban-kaldir': this.handleUnban,
+                stats: this.handleStats,
+                permissions: this.handlePermissions,
+                workload: this.handleWorkload,
+                'sistem-durumu': this.handleSystemStatus,
+                'guncelleme-kontrol': this.handleUpdateCheck,
+                'proje-istatistik': this.handleProjectStats,
+                'rapor-gonder': this.handleSendReport,
+                'mod-listesi': this.handleModList
+            };
 
-            // Admin yetkisi kontrolü
-            if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
-                await interaction.reply({
-                    content: '❌ Bu komutu kullanmak için yönetici yetkisine sahip olmanız gerekiyor.',
-                    ephemeral: true
-                });
-                return;
-            }
-
-            await interaction.deferReply({ ephemeral: true });
-
-            switch (subcommand) {
-                case 'takvim-olustur':
-                    await this.handleCreateSchedule(interaction, client);
-                    break;
-                case 'kullanici-izin':
-                    await this.handleUserPermission(interaction, client);
-                    break;
-                case 'kalici-saat':
-                    await this.handlePermanentShift(interaction, client);
-                    break;
-                case 'saat-degistir':
-                    await this.handleChangeShift(interaction, client);
-                    break;
-                case 'mod-ekle':
-                    await this.handleAddMod(interaction, client);
-                    break;
-                case 'modlari-guncelle':
-                    await this.handleUpdateMods(interaction, client);
-                    break;
-                case 'takvim-gonder':
-                    await this.handleSendSurvey(interaction, client);
-                    break;
-                case 'takvim-sil':
-                    await this.handleDeleteSchedule(interaction, client);
-                    break;
-                case 'cezali-listesi':
-                    await this.handlePunishedList(interaction, client);
-                    break;
-                case 'ban-kaldir':
-                    await this.handleUnban(interaction, client);
-                    break;
-                case 'stats':
-                    await this.handleStats(interaction, client);
-                    break;
-                case 'permissions':
-                    await this.handlePermissions(interaction, client);
-                    break;
-                case 'workload':
-                    await this.handleWorkload(interaction, client);
-                    break;
-                default:
-                    await interaction.editReply({
-                        content: '❌ Bilinmeyen alt komut.'
-                    });
-            }
-
+            const handler = handlers[sub];
+            if (!handler) throw new Error(`Bilinmeyen alt komut: ${sub}`);
+            await handler.call(this, interaction, client);
         } catch (error) {
-            client.logger.botError(error, 'Admin komut');
-            
-            try {
-                await interaction.editReply({
-                    content: '❌ Komut çalıştırılırken bir hata oluştu.'
-                });
-            } catch (replyError) {
-                client.logger.error('Hata mesajı gönderilemedi:', replyError.message);
-            }
+            client.logger.botError(error, `Admin/${sub}`);
+            await interaction.editReply({ content: `❌ İşlem başarısız: ${error.message}` });
         }
     },
 
-    // Takvim oluştur
+    getDateOption(interaction, client, name = 'tarih') {
+        const value = interaction.options.getString(name)
+            || getLocalDateString(new Date(), client.config.schedule.timezone);
+        if (!isValidDateString(value)) throw new Error('Tarih YYYY-MM-DD formatında ve geçerli olmalıdır.');
+        return value;
+    },
+
     async handleCreateSchedule(interaction, client) {
-        const date = interaction.options.getString('tarih') || new Date().toISOString().split('T')[0];
-        
-        try {
-            const AutoScheduleManager = require('../utils/autoScheduleManager');
-            const autoScheduler = new AutoScheduleManager(client);
-            
-            await interaction.editReply({
-                content: `🔄 **${date}** için takvim oluşturuluyor...`
-            });
-
-            const result = await autoScheduler.createDailySchedule(date);
-            
-            if (result.success) {
-                await interaction.editReply({
-                    content: `✅ **${date}** için takvim başarıyla oluşturuldu!\n\n${result.summary}`
-                });
-            } else {
-                await interaction.editReply({
-                    content: `❌ Takvim oluşturulamadı: ${result.error}`
-                });
-            }
-        } catch (error) {
-            await interaction.editReply({
-                content: `❌ Takvim oluşturma hatası: ${error.message}`
-            });
-        }
+        const date = this.getDateOption(interaction, client);
+        const result = await new AutoScheduleManager(client).createDailySchedule(date);
+        await interaction.editReply({
+            content: result.success
+                ? `✅ **${date}** için anket başlatıldı.\n${result.summary || ''}`
+                : `❌ ${result.error}`
+        });
     },
 
-    // Kullanıcı izin/kısıtlama
     async handleUserPermission(interaction, client) {
         const user = interaction.options.getUser('kullanici');
-        const startTime = interaction.options.getString('baslangic');
-        const endTime = interaction.options.getString('bitis');
+        const start = interaction.options.getString('baslangic');
+        const end = interaction.options.getString('bitis');
         const type = interaction.options.getString('tur');
         const description = interaction.options.getString('aciklama') || '';
 
-        try {
-            // Saat formatını kontrol et
-            const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
-            if (!timeRegex.test(startTime) || !timeRegex.test(endTime)) {
-                await interaction.editReply({
-                    content: '❌ Geçersiz saat formatı! HH:MM formatında giriniz (örn: 14:30)'
-                });
-                return;
-            }
-
-            await client.database.setUserTimePermission(user.id, startTime, endTime, type, description);
-
-            const typeText = type === 'allow' ? '✅ İzin verildi' : '❌ Kısıtlandı';
-            const actionText = type === 'allow' ? 'çalışabilir' : 'çalışamaz';
-
-            await interaction.editReply({
-                content: `${typeText} **${user.username}** kullanıcısı **${startTime}-${endTime}** saatleri arasında ${actionText}.\n${description ? `📝 Açıklama: ${description}` : ''}`
-            });
-
-        } catch (error) {
-            await interaction.editReply({
-                content: `❌ İzin ayarlama hatası: ${error.message}`
-            });
+        const startMinutes = parseClock(start);
+        const endMinutes = parseClock(end);
+        if (startMinutes === null || endMinutes === null || startMinutes >= 1440 || startMinutes === endMinutes) {
+            throw new Error('Saatler HH:MM formatında olmalı; bitiş için 24:00 kullanılabilir.');
         }
+
+        await client.database.setUserTimePermission(user.id, start, end, type, description);
+        await interaction.editReply({
+            content: `✅ **${user.username}** için ${start}-${end} aralığı **${type === 'allow' ? 'izin' : 'kısıtlama'}** olarak kaydedildi.`
+        });
     },
 
-    // Kalıcı saat belirleme
     async handlePermanentShift(interaction, client) {
         const user = interaction.options.getUser('kullanici');
-        const shift = interaction.options.getString('vardiya');
+        const shiftId = interaction.options.getString('vardiya');
         const description = interaction.options.getString('aciklama') || '';
+        const slot = buildSlots(client.config.timeSlots).find(item => item.id === shiftId);
+        if (!slot) throw new Error('Geçersiz vardiya.');
 
-        try {
-            await client.database.setPermanentShift(user.id, shift, description);
-
-            const shiftNames = {
-                'slot1': '🌚 Vardiya 1 - Gece Yarısı (00:00-05:00)',
-                'slot2': '🌅 Vardiya 2 - Sabah (05:00-10:00)',
-                'slot3': '☀️ Vardiya 3 - Öğlen (10:00-15:00)',
-                'slot4': '🌤️ Vardiya 4 - Öğleden Sonra (15:00-20:00)',
-                'slot5': '🌆 Vardiya 5 - Akşam-Gece (20:00-00:00)'
-            };
-
-            await interaction.editReply({
-                content: `✅ **${user.username}** kullanıcısına kalıcı vardiya atandı:\n\n${shiftNames[shift]}\n${description ? `📝 Açıklama: ${description}` : ''}\n\n⚠️ Bu kullanıcı artık otomatik olarak bu vardiyaya atanacak!`
-            });
-
-        } catch (error) {
-            await interaction.editReply({
-                content: `❌ Kalıcı saat atama hatası: ${error.message}`
-            });
+        const existing = await client.database.getModerator(user.id);
+        if (!existing) {
+            await client.database.addModerator(user.id, user.username, user.globalName || user.username, []);
         }
+        await client.database.setPermanentShift(user.id, shiftId, description);
+        await interaction.editReply({ content: `✅ **${user.username}** için kalıcı vardiya ayarlandı:\n${slot.name}` });
     },
 
-    // Saat değiştirme
     async handleChangeShift(interaction, client) {
         const user = interaction.options.getUser('kullanici');
-        const newShift = interaction.options.getString('yeni-vardiya');
-        const date = interaction.options.getString('tarih') || new Date().toISOString().split('T')[0];
+        const shiftId = interaction.options.getString('yeni-vardiya');
+        const date = this.getDateOption(interaction, client);
         const reason = interaction.options.getString('sebep') || 'Admin tarafından değiştirildi';
+        const slot = buildSlots(client.config.timeSlots).find(item => item.id === shiftId);
+        if (!slot) throw new Error('Geçersiz vardiya.');
+
+        const result = await client.database.changeUserShift(user.id, shiftId, date, reason);
+        if (!result.success) throw new Error(result.error);
 
         try {
-            const result = await client.database.changeUserShift(user.id, newShift, date, reason);
-            
-            if (result.success) {
-                // Kullanıcıya DM gönder
-                try {
-                    const dmUser = await client.users.fetch(user.id);
-                    const shiftNames = {
-                        'slot1': '🌚 Vardiya 1 - Gece Yarısı (00:00-05:00)',
-                        'slot2': '🌅 Vardiya 2 - Sabah (05:00-10:00)',
-                        'slot3': '☀️ Vardiya 3 - Öğlen (10:00-15:00)',
-                        'slot4': '🌤️ Vardiya 4 - Öğleden Sonra (15:00-20:00)',
-                        'slot5': '🌆 Vardiya 5 - Akşam-Gece (20:00-00:00)'
-                    };
-
-                    await dmUser.send({
-                        embeds: [new EmbedBuilder()
-                            .setColor('#ff9900')
-                            .setTitle('🔄 Vardiya Değişikliği')
-                            .setDescription(`**${date}** tarihli vardiyandız değiştirildi!`)
-                            .addFields(
-                                {
-                                    name: '📅 Tarih',
-                                    value: date,
-                                    inline: true
-                                },
-                                {
-                                    name: '🕒 Yeni Vardiya',
-                                    value: shiftNames[newShift],
-                                    inline: false
-                                },
-                                {
-                                    name: '📝 Sebep',
-                                    value: reason,
-                                    inline: false
-                                }
-                            )
-                            .setTimestamp()
-                        ]
-                    });
-                } catch (dmError) {
-                    client.logger.error(`${user.username} kullanıcısına DM gönderilemedi:`, dmError.message);
-                }
-
-                await interaction.editReply({
-                    content: `✅ **${user.username}** kullanıcısının **${date}** tarihli vardiyası değiştirildi!\n📨 Kullanıcıya bildirim gönderildi.`
-                });
-            } else {
-                await interaction.editReply({
-                    content: `❌ Vardiya değiştirme hatası: ${result.error}`
-                });
-            }
-
-        } catch (error) {
-            await interaction.editReply({
-                content: `❌ Saat değiştirme hatası: ${error.message}`
+            const dmUser = await client.users.fetch(user.id);
+            await dmUser.send({
+                embeds: [new EmbedBuilder()
+                    .setColor('#ff9900')
+                    .setTitle('🔄 Vardiya Değişikliği')
+                    .setDescription(`**${date}** tarihli vardiyanız değiştirildi.`)
+                    .addFields(
+                        { name: '🕒 Yeni Vardiya', value: slot.name },
+                        { name: '📝 Sebep', value: reason }
+                    )
+                    .setTimestamp()]
             });
+        } catch (error) {
+            client.logger.warn(`${user.username} kullanıcısına vardiya DM'i gönderilemedi: ${error.message}`);
         }
+
+        await interaction.editReply({ content: `✅ **${user.username}** → ${slot.name}` });
     },
 
-    // Mod ekle
     async handleAddMod(interaction, client) {
         const user = interaction.options.getUser('kullanici');
         const role = interaction.options.getString('rol');
-
-        try {
-            await client.database.addModerator(user.id, user.username, user.displayName || user.username, [role]);
-
-            await interaction.editReply({
-                content: `✅ **${user.username}** sisteme **${role}** rolü ile eklendi!`
-            });
-
-        } catch (error) {
-            await interaction.editReply({
-                content: `❌ Moderatör ekleme hatası: ${error.message}`
-            });
-        }
-    },
-
-    // Modları güncelle
-    async handleUpdateMods(interaction, client) {
-        await interaction.editReply({
-            content: '🔄 Moderatörler taranıyor ve güncelleniyor...'
-        });
-
+        let displayName = user.globalName || user.username;
         try {
             const guild = client.guilds.cache.get(client.config.discord.guildId);
-            await guild.members.fetch();
+            const member = guild ? await guild.members.fetch(user.id) : null;
+            if (member) displayName = member.displayName;
+        } catch {}
 
-            const moderators = [];
-            
-            for (const [userId, member] of guild.members.cache) {
-                const userRoles = member.roles.cache.map(role => role.name);
-                const modRoles = userRoles.filter(role => client.config.discord.modRoles.includes(role));
-                
-                if (modRoles.length > 0) {
-                    moderators.push({
-                        userId: member.user.id,
-                        username: member.user.username,
-                        displayName: member.displayName,
-                        roles: modRoles
-                    });
-                    
-                    await client.database.updateModerator(
-                        member.user.id,
-                        member.user.username,
-                        member.displayName,
-                        modRoles
-                    );
-                }
-            }
-
-            await interaction.editReply({
-                content: `✅ **${moderators.length}** moderatör güncellendi!`
-            });
-
-        } catch (error) {
-            await interaction.editReply({
-                content: `❌ Moderatör güncelleme hatası: ${error.message}`
-            });
-        }
+        await client.database.addModerator(user.id, user.username, displayName, [role]);
+        await interaction.editReply({ content: `✅ **${user.username}** sisteme **${role}** rolü ile eklendi.` });
     },
 
-    // Takvim gönder (Anket)
+    async handleUpdateMods(interaction, client) {
+        const guild = client.guilds.cache.get(client.config.discord.guildId)
+            || await client.guilds.fetch(client.config.discord.guildId).catch(() => null);
+        if (!guild) throw new Error('Discord sunucusu bulunamadı.');
+
+        await guild.members.fetch();
+        const activeIds = [];
+        for (const member of guild.members.cache.values()) {
+            if (member.user.bot) continue;
+            const roles = member.roles.cache.map(role => role.name)
+                .filter(role => client.config.discord.modRoles.includes(role));
+            if (roles.length === 0) continue;
+            activeIds.push(member.id);
+            await client.database.updateModerator(member.id, member.user.username, member.displayName, roles);
+        }
+        await client.database.deactivateMissingModerators(activeIds);
+        await interaction.editReply({ content: `✅ **${activeIds.length}** moderatör güncellendi.` });
+    },
+
     async handleSendSurvey(interaction, client) {
         const period = interaction.options.getString('period') || client.config.utils.getCurrentPeriod();
-        
+        if (!/^\d{4}-W\d{2}$/.test(period)) throw new Error('Dönem formatı YYYY-Www olmalıdır. Örn: 2026-W37');
+
+        const now = new Date();
+        const deadline = new Date(now.getTime() + client.config.schedule.responseTimeoutHours * 3600000);
+        const end = new Date(now.getTime() + 7 * 86400000);
+        await client.database.saveSurveyPeriod(period, now.toISOString(), end.toISOString(), deadline.toISOString());
+
+        const result = await new SurveyManager(client).sendSurveyToAllMods(period);
+        if (result.sent === 0) {
+            await interaction.editReply({
+                content: '⚠️ Anket hiçbir moderatöre teslim edilemedi. Moderatör listesini ve kullanıcıların DM izinlerini kontrol edin.'
+            });
+            return;
+        }
         await interaction.editReply({
-            content: `🔄 **${period}** dönemi için anket gönderiliyor...`
+            content: `✅ **${period}** anketi gönderildi. Başarılı: **${result.sent}**, başarısız: **${result.failed}**.`
         });
-
-        try {
-            const SurveyManager = require('../utils/surveyManager');
-            const surveyManager = new SurveyManager(client);
-            
-            const result = await surveyManager.sendSurveyToAllMods(period);
-            
-            await interaction.editReply({
-                content: `✅ **${period}** dönemi anket gönderimi tamamlandı!\n📊 Başarılı: **${result.sent}**, Başarısız: **${result.failed}**`
-            });
-
-        } catch (error) {
-            await interaction.editReply({
-                content: `❌ Anket gönderme hatası: ${error.message}`
-            });
-        }
     },
 
-    // Takvim sil
+    async handlePublishSurvey(interaction, client) {
+        const period = interaction.options.getString('period') || client.config.utils.getCurrentPeriod();
+        if (!/^\d{4}-W\d{2}$/.test(period)) throw new Error('Dönem formatı YYYY-Www olmalıdır. Örn: 2026-W37');
+        const result = await new SchedulePublisher(client).publishSchedule(period);
+        if (!result.success) {
+            await interaction.editReply({ content: `ℹ️ ${result.error}` });
+            return;
+        }
+        await interaction.editReply({ content: `✅ **${period}** müsaitlik özeti takvim kanalında yayınlandı. Yanıt: ${result.responseCount}.` });
+    },
+
     async handleDeleteSchedule(interaction, client) {
-        const date = interaction.options.getString('tarih');
-
-        try {
-            await client.database.deleteScheduleForDate(date);
-            
-            await interaction.editReply({
-                content: `✅ **${date}** tarihinin takvimi silindi!`
-            });
-
-        } catch (error) {
-            await interaction.editReply({
-                content: `❌ Takvim silme hatası: ${error.message}`
-            });
-        }
+        const date = this.getDateOption(interaction, client);
+        const count = await client.database.deleteScheduleForDate(date);
+        await interaction.editReply({ content: `✅ **${date}** takvimi silindi. Silinen atama: ${count}.` });
     },
 
-    // Cezalı listesi
     async handlePunishedList(interaction, client) {
-        try {
-            const punishedUsers = await client.database.getPunishedUsers();
-            
-            if (punishedUsers.length === 0) {
-                await interaction.editReply({
-                    content: '✅ Şu anda cezalı kullanıcı bulunmuyor.'
-                });
-                return;
-            }
-
-            const embed = new EmbedBuilder()
-                .setColor('#ff0000')
-                .setTitle('🚫 Cezalı Kullanıcılar')
-                .setDescription(`Toplam **${punishedUsers.length}** cezalı kullanıcı`)
-                .setTimestamp();
-
-            const punishmentList = punishedUsers.map(user => {
-                const endDate = new Date(user.ban_end).toLocaleString('tr-TR');
-                return `**${user.username}** <@${user.user_id}>\n📝 Sebep: ${user.violation_type}\n⏰ Bitiş: ${endDate}`;
-            });
-
-            embed.addFields({
-                name: 'Cezalı Kullanıcılar',
-                value: punishmentList.join('\n\n'),
-                inline: false
-            });
-
-            await interaction.editReply({ embeds: [embed] });
-
-        } catch (error) {
-            await interaction.editReply({
-                content: `❌ Cezalı listesi hatası: ${error.message}`
-            });
+        const users = await client.database.getPunishedUsers();
+        if (users.length === 0) {
+            await interaction.editReply({ content: '✅ Aktif planlama cezası bulunmuyor.' });
+            return;
         }
+
+        const text = users.slice(0, 20).map(user => {
+            const end = new Date(user.punishment_end).toLocaleString('tr-TR', { timeZone: client.config.schedule.timezone });
+            return `**${user.username}** <@${user.user_id}>\nSebep: ${user.reason} • Ceza: ${user.punishment_type} • Bitiş: ${end}`;
+        }).join('\n\n');
+
+        await interaction.editReply({
+            embeds: [new EmbedBuilder()
+                .setColor('#ff0000')
+                .setTitle('🚫 Aktif Planlama Cezaları')
+                .setDescription(text)
+                .setFooter({ text: `Toplam: ${users.length}` })
+                .setTimestamp()]
+        });
     },
 
-    // Ban kaldır
     async handleUnban(interaction, client) {
         const user = interaction.options.getUser('kullanici');
+        const result = await client.database.removeBan(user.id);
+        if (!result.success) throw new Error(result.error);
 
         try {
-            const result = await client.database.removeBan(user.id);
-            
-            if (result.success) {
-                // Kullanıcıya DM gönder
-                try {
-                    const dmUser = await client.users.fetch(user.id);
-                    await dmUser.send({
-                        embeds: [new EmbedBuilder()
-                            .setColor('#00ff00')
-                            .setTitle('✅ Ban Kaldırıldı')
-                            .setDescription('Cezanız admin tarafından kaldırıldı! Artık normal şekilde moderatörlük görevlerinizi yapabilirsiniz.')
-                            .setTimestamp()
-                        ]
-                    });
-                } catch (dmError) {
-                    client.logger.error(`${user.username} kullanıcısına DM gönderilemedi:`, dmError.message);
-                }
-
-                await interaction.editReply({
-                    content: `✅ **${user.username}** kullanıcısının banı kaldırıldı!\n📨 Kullanıcıya bildirim gönderildi.`
-                });
-            } else {
-                await interaction.editReply({
-                    content: `❌ Ban kaldırma hatası: ${result.error}`
-                });
-            }
-
+            await (await client.users.fetch(user.id)).send('✅ Planlama cezanız yönetici tarafından kaldırıldı.');
         } catch (error) {
-            await interaction.editReply({
-                content: `❌ Ban kaldırma hatası: ${error.message}`
-            });
+            client.logger.warn(`${user.username} kullanıcısına ceza kaldırma DM'i gönderilemedi: ${error.message}`);
         }
+        await interaction.editReply({ content: `✅ **${user.username}** kullanıcısının aktif planlama cezası kaldırıldı.` });
     },
 
-    // Bot istatistikleri
     async handleStats(interaction, client) {
-        const embed = new EmbedBuilder()
-            .setColor('#0099ff')
-            .setTitle('📊 Bot İstatistikleri')
-            .setThumbnail(client.user.displayAvatarURL())
-            .setTimestamp();
+        const activeMods = await client.database.getActiveModerators();
+        const punished = await client.database.getPunishedUsers();
+        const uptime = process.uptime();
+        const uptimeText = `${Math.floor(uptime / 86400)}g ${Math.floor((uptime % 86400) / 3600)}s ${Math.floor((uptime % 3600) / 60)}dk`;
+        const scheduler = client.automaticScheduler?.getStatus();
 
-        try {
-            const activeMods = await client.database.getActiveModerators();
-            const punishedUsers = await client.database.getPunishedUsers();
-            const uptime = process.uptime();
-            const uptimeText = `${Math.floor(uptime / 86400)}g ${Math.floor((uptime % 86400) / 3600)}s ${Math.floor((uptime % 3600) / 60)}dk`;
-            
-            embed.addFields(
-                {
-                    name: '🤖 Bot Bilgileri',
-                    value: [
-                        `**Çalışma Süresi:** ${uptimeText}`,
-                        `**Discord.js:** ${require('discord.js').version}`,
-                        `**Node.js:** ${process.version}`,
-                        `**Bellek:** ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)} MB`
-                    ].join('\n'),
-                    inline: false
-                },
-                {
-                    name: '👥 Moderatör İstatistikleri',
-                    value: [
-                        `**Aktif Moderatör:** ${activeMods.length}`,
-                        `**Cezalı Kullanıcı:** ${punishedUsers.length}`,
-                        `**Sistem Durumu:** ✅ Aktif`
-                    ].join('\n'),
-                    inline: false
-                }
-            );
+        await interaction.editReply({
+            embeds: [new EmbedBuilder()
+                .setColor('#0099ff')
+                .setTitle('📊 Bot İstatistikleri')
+                .addFields(
+                    { name: 'Çalışma Süresi', value: uptimeText, inline: true },
+                    { name: 'Aktif Moderatör', value: String(activeMods.length), inline: true },
+                    { name: 'Aktif Ceza', value: String(punished.length), inline: true },
+                    { name: 'Node.js', value: process.version, inline: true },
+                    { name: 'Discord.js', value: require('discord.js').version, inline: true },
+                    { name: 'Scheduler', value: scheduler?.isRunning ? `✅ ${scheduler.taskCount} görev` : '❌', inline: true }
+                )
+                .setTimestamp()]
+        });
+    },
 
-        } catch (error) {
-            embed.addFields({
-                name: '❌ Hata',
-                value: 'İstatistikler alınırken bir hata oluştu.',
-                inline: false
-            });
+    async handlePermissions(interaction, client) {
+        const checker = new PermissionChecker(client);
+        const result = await checker.checkBotPermissions();
+        await interaction.editReply({ embeds: [checker.createPermissionReport(result)] });
+    },
+
+    async handleWorkload(interaction, client) {
+        const moderators = await client.database.getActiveModerators();
+        if (moderators.length === 0) {
+            await interaction.editReply({ content: 'ℹ️ Aktif moderatör bulunmuyor.' });
+            return;
         }
 
+        const slots = buildSlots(client.config.timeSlots);
+        const today = getLocalDateString(new Date(), client.config.schedule.timezone);
+        const [year, month, day] = today.split('-').map(Number);
+        const rows = [];
+
+        for (const mod of moderators) {
+            let totalHours = 0;
+            let totalDays = 0;
+            for (let offset = 0; offset < 7; offset += 1) {
+                const date = new Date(Date.UTC(year, month - 1, day));
+                date.setUTCDate(date.getUTCDate() - offset);
+                const dateString = date.toISOString().slice(0, 10);
+                const assignments = await client.database.getUserAssignmentsForDate(mod.user_id, dateString);
+                if (assignments.length > 0) totalDays += 1;
+                totalHours += assignments.reduce((sum, assignment) => {
+                    return sum + (slots.find(slot => slot.id === assignment.slot_id)?.hours || 0);
+                }, 0);
+            }
+            rows.push({ username: mod.username, totalHours, totalDays });
+        }
+
+        rows.sort((a, b) => b.totalHours - a.totalHours || a.username.localeCompare(b.username, 'tr'));
+        const description = rows.slice(0, 20).map((row, index) =>
+            `${index + 1}. **${row.username}** — ${row.totalHours} saat / ${row.totalDays} gün`
+        ).join('\n');
+
+        await interaction.editReply({
+            embeds: [new EmbedBuilder()
+                .setColor('#0099ff')
+                .setTitle('📊 Son 7 Günlük İş Yükü')
+                .setDescription(description || 'Veri yok.')
+                .setTimestamp()]
+        });
+    },
+
+    async handleSystemStatus(interaction, client) {
+        if (!client.projectMonitor) throw new Error('Proje izleme servisi hazır değil.');
+        const embed = await client.projectMonitor.buildSystemStatusEmbed({ includeUpdate: true });
         await interaction.editReply({ embeds: [embed] });
     },
 
-    // Yetki kontrolü
-    async handlePermissions(interaction, client) {
-        try {
-            const PermissionChecker = require('../utils/permissionChecker');
-            const permissionChecker = new PermissionChecker(client);
-            
-            await interaction.editReply({
-                content: '🔄 Bot yetkileri kontrol ediliyor...'
-            });
-
-            const permissionCheck = await permissionChecker.checkBotPermissions();
-            const embed = permissionChecker.createPermissionReport(permissionCheck);
-
-            await interaction.editReply({
-                content: permissionCheck.success ? 
-                    '✅ Yetki kontrolü tamamlandı!' : 
-                    '⚠️ Yetki sorunları tespit edildi!',
-                embeds: [embed]
-            });
-
-        } catch (error) {
-            await interaction.editReply({
-                content: `❌ Yetki kontrolü hatası: ${error.message}`
-            });
-        }
+    async handleUpdateCheck(interaction, client) {
+        if (!client.projectMonitor) throw new Error('Proje izleme servisi hazır değil.');
+        const status = await client.projectMonitor.getUpdateStatus({ force: true });
+        await interaction.editReply({ embeds: [client.projectMonitor.buildUpdateEmbed(status)] });
     },
 
-    // Çalışma yükü analizi
-    async handleWorkload(interaction, client) {
-        try {
-            await interaction.editReply({
-                content: '📊 Moderatör çalışma yükü analiz ediliyor...'
-            });
-
-            const moderators = await client.database.getActiveModerators();
-            const today = new Date().toISOString().split('T')[0];
-            
-            // Son 7 günü hesapla
-            const last7Days = [];
-            for (let i = 0; i < 7; i++) {
-                const date = new Date();
-                date.setDate(date.getDate() - i);
-                last7Days.push(date.toISOString().split('T')[0]);
-            }
-
-            const workloadData = [];
-            
-            for (const mod of moderators) {
-                let totalHours = 0;
-                let totalDays = 0;
-                
-                for (const date of last7Days) {
-                    const assignments = await client.database.getUserAssignmentsForDate(mod.user_id, date);
-                    if (assignments.length > 0) {
-                        totalDays++;
-                        for (const assignment of assignments) {
-                            const hours = this.getSlotHours(assignment.slot_id);
-                            totalHours += hours;
-                        }
-                    }
-                }
-
-                workloadData.push({
-                    username: mod.username,
-                    userId: mod.user_id,
-                    totalHours,
-                    totalDays,
-                    avgHoursPerDay: totalDays > 0 ? (totalHours / totalDays).toFixed(1) : 0
-                });
-            }
-
-            // Çalışma yüküne göre sırala
-            workloadData.sort((a, b) => b.totalHours - a.totalHours);
-
-            const embed = new EmbedBuilder()
-                .setColor('#0099ff')
-                .setTitle('📊 Moderatör Çalışma Yükü Analizi')
-                .setDescription(`Son 7 günlük çalışma saatleri analizi`)
-                .setTimestamp();
-
-            // En çok çalışanlar
-            const topWorkers = workloadData.slice(0, 3);
-            if (topWorkers.length > 0) {
-                embed.addFields({
-                    name: '🏆 En Çok Çalışanlar',
-                    value: topWorkers.map((mod, index) => 
-                        `**${index + 1}.** ${mod.username}\n` +
-                        `📊 ${mod.totalHours} saat (${mod.totalDays} gün)\n` +
-                        `📈 Günlük ort: ${mod.avgHoursPerDay} saat`
-                    ).join('\n\n'),
-                    inline: false
-                });
-            }
-
-            // En az çalışanlar
-            const leastWorkers = workloadData.slice(-3).reverse();
-            if (leastWorkers.length > 0) {
-                embed.addFields({
-                    name: '💤 En Az Çalışanlar',
-                    value: leastWorkers.map((mod, index) => 
-                        `**${index + 1}.** ${mod.username}\n` +
-                        `📊 ${mod.totalHours} saat (${mod.totalDays} gün)\n` +
-                        `📈 Günlük ort: ${mod.avgHoursPerDay} saat`
-                    ).join('\n\n'),
-                    inline: false
-                });
-            }
-
-            // Genel istatistikler
-            const totalWorkHours = workloadData.reduce((sum, mod) => sum + mod.totalHours, 0);
-            const avgWorkHours = workloadData.length > 0 ? (totalWorkHours / workloadData.length).toFixed(1) : 0;
-            
-            embed.addFields({
-                name: '📈 Genel İstatistikler',
-                value: [
-                    `**Toplam Çalışma:** ${totalWorkHours} saat`,
-                    `**Ortalama/Moderatör:** ${avgWorkHours} saat`,
-                    `**Aktif Moderatör:** ${workloadData.filter(m => m.totalHours > 0).length}`,
-                    `**İdeal Dağılım:** ${(totalWorkHours / moderators.length).toFixed(1)} saat/mod`
-                ].join('\n'),
-                inline: false
-            });
-
-            await interaction.editReply({
-                content: '✅ Çalışma yükü analizi tamamlandı!',
-                embeds: [embed]
-            });
-
-        } catch (error) {
-            await interaction.editReply({
-                content: `❌ Çalışma yükü analizi hatası: ${error.message}`
-            });
-        }
+    async handleProjectStats(interaction, client) {
+        if (!client.projectMonitor) throw new Error('Proje izleme servisi hazır değil.');
+        const stats = await client.projectMonitor.getProjectStats();
+        const latest = stats.latestRelease?.tag_name || 'Release yok';
+        await interaction.editReply({
+            embeds: [new EmbedBuilder()
+                .setColor('#24292F')
+                .setTitle('📦 GitHub Proje İstatistikleri')
+                .setDescription(`**${stats.repository}**`)
+                .addFields(
+                    { name: '⭐ Yıldız', value: String(stats.stars), inline: true },
+                    { name: '🍴 Fork', value: String(stats.forks), inline: true },
+                    { name: '🐛 Açık Issue', value: String(stats.openIssues), inline: true },
+                    { name: '👀 Watcher', value: String(stats.watchers), inline: true },
+                    { name: '🏷️ Release', value: String(stats.releases), inline: true },
+                    { name: '📎 Release Asset', value: String(stats.releaseAssets), inline: true },
+                    { name: '⬇️ Asset İndirmeleri', value: String(stats.totalDownloads), inline: true },
+                    { name: '📦 Asset Boyutu', value: require('../utils/versionUtils').formatBytes(stats.totalAssetBytes), inline: true },
+                    { name: 'Son Release', value: latest, inline: true },
+                    { name: 'GitHub', value: stats.url, inline: false }
+                )
+                .setFooter({ text: 'İndirme sayısı yalnızca GitHub Release asset dosyalarını kapsar.' })
+                .setTimestamp()]
+        });
     },
 
-    // Slot saat süresini hesapla
-    getSlotHours(slotId) {
-        const slotHours = {
-            'slot1': 5, // 00:00-05:00
-            'slot2': 5, // 05:00-10:00
-            'slot3': 5, // 10:00-15:00
-            'slot4': 5, // 15:00-20:00
-            'slot5': 4  // 20:00-24:00
-        };
-        return slotHours[slotId] || 5;
+    async handleSendReport(interaction, client) {
+        if (!client.projectMonitor) throw new Error('Proje izleme servisi hazır değil.');
+        const result = await client.projectMonitor.sendOperationalReport(`manuel • ${interaction.user.username}`);
+        if (!result.sent) throw new Error(result.reason);
+        await interaction.editReply({ content: `✅ Operasyon raporu <#${result.channelId}> kanalına gönderildi.` });
+    },
+
+    async handleModList(interaction, client) {
+        const moderators = await client.database.getActiveModerators();
+        if (moderators.length === 0) {
+            await interaction.editReply({ content: 'ℹ️ Aktif moderatör bulunmuyor.' });
+            return;
+        }
+        const rows = moderators.slice(0, 25).map((mod, index) => {
+            const roles = Array.isArray(mod.roles) && mod.roles.length > 0 ? mod.roles.join(', ') : 'Rol bilgisi yok';
+            return `${index + 1}. <@${mod.user_id}> — **${mod.display_name || mod.username}**\n${roles}`;
+        });
+        const suffix = moderators.length > 25 ? `\n\n…ve ${moderators.length - 25} moderatör daha.` : '';
+        await interaction.editReply({
+            embeds: [new EmbedBuilder()
+                .setColor('#5865F2')
+                .setTitle(`👥 Aktif Moderatörler (${moderators.length})`)
+                .setDescription(rows.join('\n') + suffix)
+                .setTimestamp()]
+        });
     }
-}; 
+
+};

@@ -1,0 +1,14 @@
+.git
+.github
+node_modules
+.env
+.env.*
+data
+logs
+temp
+*.db
+*.sqlite
+*.sqlite3
+*.log
+coverage
+dist

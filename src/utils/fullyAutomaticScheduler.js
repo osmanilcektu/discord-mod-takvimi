@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const AutoScheduleManager = require('./autoScheduleManager');
+const { getLocalDateString, addDaysToDateString, getMinutesInTimeZone } = require('./dateTime');
 
 class FullyAutomaticScheduler {
     constructor(client) {
@@ -9,380 +10,208 @@ class FullyAutomaticScheduler {
         this.database = client.database;
         this.autoScheduleManager = new AutoScheduleManager(client);
         this.isRunning = false;
+        this.tasks = [];
+        this.lastHealthAlertAt = 0;
+        this.surveyStartInFlight = false;
     }
 
-    // Otomatik takvim sistemini başlat
+    schedule(expression, handler) {
+        const task = cron.schedule(expression, async () => {
+            try {
+                await handler();
+            } catch (error) {
+                this.logger.botError(error, `Cron: ${expression}`);
+            }
+        }, { timezone: this.config.schedule.timezone });
+        this.tasks.push(task);
+        return task;
+    }
+
     start() {
         if (!this.config.schedule.autoScheduleEnabled) {
-            this.logger.info('Otomatik takvim sistemi devre dışı');
+            this.logger.info('Otomatik takvim sistemi devre dışı.');
+            return;
+        }
+        if (this.isRunning) {
+            this.logger.warn('Otomatik takvim sistemi zaten çalışıyor.');
             return;
         }
 
-        if (this.isRunning) {
-            this.logger.warn('Otomatik takvim sistemi zaten çalışıyor');
-            return;
-        }
+        const hour = this.config.schedule.dailyScheduleHour;
+        this.schedule(`0 0 ${hour} * * *`, () => this.startTomorrowSurvey());
+        this.schedule('0 */5 * * * *', () => this.recoverDueSurveys());
+        this.schedule('0 0 * * * *', () => this.checkExpiredPunishments());
+        this.schedule('0 */10 * * * *', () => this.systemHealthCheck());
+        this.schedule('0 7,17,27,37,47,57 * * * *', () => this.ensureRecentSurveyStarted());
 
         this.isRunning = true;
-        this.logger.info('Tam otomatik takvim sistemi başlatılıyor...');
+        this.logger.info(`Otomatik takvim sistemi başlatıldı. Günlük anket saati: ${String(hour).padStart(2, '0')}:00`);
 
-        // Her gün saat 8:00'de kontrol et
-        const dailyScheduleHour = this.config.schedule.dailyScheduleHour || 8;
-        const cronExpression = `0 0 ${dailyScheduleHour} * * *`; // Her gün saat X:00
-
-        cron.schedule(cronExpression, async () => {
-            await this.checkAndCreateDailySchedule();
-        }, {
-            timezone: "Europe/Istanbul"
+        setImmediate(() => {
+            this.recoverDueSurveys().catch(error => this.logger.botError(error, 'Bekleyen anket kurtarma'));
+            this.checkExpiredPunishments().catch(error => this.logger.botError(error, 'Süresi biten ceza kontrolü'));
+            this.ensureRecentSurveyStarted().catch(error => this.logger.botError(error, 'Kaçırılan anket kontrolü'));
         });
-
-        // Her saat başı ceza süresi biten kullanıcıları kontrol et
-        cron.schedule('0 0 * * * *', async () => {
-            await this.checkExpiredPunishments();
-        }, {
-            timezone: "Europe/Istanbul"
-        });
-
-        // Her 10 dakikada bir sistem durumunu kontrol et
-        cron.schedule('*/10 * * * *', async () => {
-            await this.systemHealthCheck();
-        }, {
-            timezone: "Europe/Istanbul"
-        });
-
-        this.logger.info(`Otomatik takvim sistemi başlatıldı! Günlük kontrol saati: ${dailyScheduleHour}:00`);
     }
 
-    // Günlük takvim kontrolü ve oluşturma
+    async startSurveyForDate(targetDate) {
+        if (this.surveyStartInFlight) return { success: true, pending: true, summary: 'Anket başlatma işlemi zaten devam ediyor.' };
+        this.surveyStartInFlight = true;
+        try {
+            const result = await this.autoScheduleManager.createDailySchedule(targetDate);
+            if (result.success) this.logger.info(`${targetDate} için günlük anket hazırlandı. ${result.summary || ''}`);
+            else this.logger.warn(`${targetDate} için günlük anket başlatılamadı: ${result.error}`);
+            return result;
+        } finally {
+            this.surveyStartInFlight = false;
+        }
+    }
+
+    async startTomorrowSurvey() {
+        const today = getLocalDateString(new Date(), this.config.schedule.timezone);
+        return this.startSurveyForDate(addDaysToDateString(today, 1));
+    }
+
+    async ensureRecentSurveyStarted() {
+        const now = new Date();
+        const today = getLocalDateString(now, this.config.schedule.timezone);
+        const currentMinutes = getMinutesInTimeZone(now, this.config.schedule.timezone);
+        const scheduledMinutes = this.config.schedule.dailyScheduleHour * 60;
+
+        let runDate;
+        let elapsedMinutes;
+        if (currentMinutes >= scheduledMinutes) {
+            runDate = today;
+            elapsedMinutes = currentMinutes - scheduledMinutes;
+        } else {
+            runDate = addDaysToDateString(today, -1);
+            elapsedMinutes = currentMinutes + 1440 - scheduledMinutes;
+        }
+
+        if (elapsedMinutes > this.config.schedule.surveyTimeoutHours * 60) return null;
+        const targetDate = addDaysToDateString(runDate, 1);
+        if (await this.database.hasScheduleForDate(targetDate)) return null;
+        const status = await this.database.getScheduleStatus(targetDate);
+        if (status) return null;
+
+        this.logger.warn(`${targetDate} için yakın zamanda kaçırılmış günlük anket tespit edildi; şimdi başlatılıyor.`);
+        return this.startSurveyForDate(targetDate);
+    }
+
+    // Geriye dönük uyumluluk: eski isim aynı davranışı çağırır.
     async checkAndCreateDailySchedule() {
-        try {
-            const today = new Date().toISOString().split('T')[0];
-            const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-
-            this.logger.info(`Günlük takvim kontrolü: ${today} ve ${tomorrow}`);
-
-            // Bugün için takvim var mı kontrol et
-            await this.ensureScheduleExists(today, 'bugün');
-            
-            // Yarın için takvim var mı kontrol et
-            await this.ensureScheduleExists(tomorrow, 'yarın');
-
-        } catch (error) {
-            this.logger.botError(error, 'Günlük takvim kontrolü');
-        }
+        return this.startTomorrowSurvey();
     }
 
-    // Belirtilen tarih için takvim olduğundan emin ol
-    async ensureScheduleExists(date, description) {
-        try {
-            const hasSchedule = await this.database.hasScheduleForDate(date);
-            
-            if (!hasSchedule) {
-                this.logger.info(`${description} (${date}) için takvim bulunamadı, oluşturuluyor...`);
-                
-                const result = await this.autoScheduleManager.createDailySchedule(date);
-                
-                if (result.success) {
-                    this.logger.info(`${description} için takvim başarıyla oluşturuldu: ${result.summary}`);
-                    
-                    // Log kanalına bildir
-                    await this.logScheduleCreation(date, description, true);
-                } else {
-                    this.logger.error(`${description} için takvim oluşturulamadı: ${result.error}`);
-                    
-                    // Log kanalına hata bildir
-                    await this.logScheduleCreation(date, description, false, result.error);
-                }
-            } else {
-                this.logger.info(`${description} (${date}) için takvim zaten mevcut`);
+    async recoverDueSurveys() {
+        const due = await this.database.getDueScheduleStatuses();
+        for (const status of due) {
+            this.logger.info(`${status.date} için süresi dolan anket tamamlanıyor.`);
+            const result = await this.autoScheduleManager.checkSurveyResponses(status.date);
+            if (!result.success) {
+                this.logger.error(`${status.date} takvimi tamamlanamadı: ${result.error}`);
             }
-
-        } catch (error) {
-            this.logger.error(`${description} takvim kontrolü hatası:`, error.message);
         }
     }
 
-    // Süresi biten cezaları kontrol et
     async checkExpiredPunishments() {
+        const expired = await this.database.getExpiredPunishments();
+        if (expired.length === 0) return;
+
+        const users = new Map();
+        for (const punishment of expired) {
+            await this.database.deactivatePunishment(punishment.id);
+            if (!users.has(punishment.user_id)) users.set(punishment.user_id, punishment);
+        }
+
+        for (const punishment of users.values()) {
+            const stillActive = await this.database.getActivePunishmentsForUser(punishment.user_id);
+            if (stillActive.length === 0) await this.notifyPunishmentEnded(punishment);
+        }
+        this.logger.info(`${expired.length} süresi biten planlama cezası kaydı kapatıldı.`);
+    }
+
+    async notifyPunishmentEnded(punishment) {
         try {
-            const expiredPunishments = await this.database.getExpiredPunishments();
-            
-            for (const punishment of expiredPunishments) {
-                await this.removePunishment(punishment);
-            }
-
-            if (expiredPunishments.length > 0) {
-                this.logger.info(`${expiredPunishments.length} süresi biten ceza kaldırıldı`);
-            }
-
+            const user = await this.client.users.fetch(punishment.user_id);
+            await user.send({
+                content: '✅ Planlama kısıtlamanız sona erdi. Tekrar vardiyalara atanabilirsiniz.'
+            });
         } catch (error) {
-            this.logger.error('Süresi biten ceza kontrolü hatası:', error.message);
+            this.logger.warn(`${punishment.username} kullanıcısına ceza bitiş bildirimi gönderilemedi: ${error.message}`);
+        }
+
+        try {
+            const channelId = this.config.discord.logChannelId;
+            if (!channelId) return;
+            const channel = await this.client.channels.fetch(channelId);
+            if (channel?.isTextBased?.()) {
+                await channel.send(`✅ <@${punishment.user_id}> kullanıcısının planlama cezası sona erdi.`);
+            }
+        } catch (error) {
+            this.logger.warn(`Ceza bitiş logu gönderilemedi: ${error.message}`);
         }
     }
 
-    // Cezayı kaldır ve kullanıcıya bildir
-    async removePunishment(punishment) {
-        try {
-            // Cezayı pasif yap
-            await this.database.removeBan(punishment.user_id);
-            
-            // Kullanıcıya bildir
-            try {
-                const user = await this.client.users.fetch(punishment.user_id);
-                
-                let punishmentText;
-                switch (punishment.punishment_type) {
-                    case 'ban_2day':
-                        punishmentText = '2 günlük moderatörlük yasağınız';
-                        break;
-                    case 'ban_1hour':
-                        punishmentText = '1 saatlik yazma yasağınız';
-                        break;
-                    case 'ban_1day':
-                        punishmentText = '1 günlük moderatörlük yasağınız';
-                        break;
-                    default:
-                        punishmentText = 'cezanız';
-                }
-
-                await user.send({
-                    embeds: [{
-                        color: 0x00ff00,
-                        title: '✅ Ceza Süresi Doldu',
-                        description: `${punishmentText} sona erdi! Artık normal şekilde moderatörlük görevlerinizi yapabilirsiniz.`,
-                        fields: [
-                            {
-                                name: '📅 Ceza Tarihi',
-                                value: new Date(punishment.created_at).toLocaleDateString('tr-TR'),
-                                inline: true
-                            },
-                            {
-                                name: '📝 Sebep',
-                                value: punishment.reason === 'no_response' ? 'Ankete yanıt vermeme' : punishment.reason,
-                                inline: true
-                            },
-                            {
-                                name: '⚠️ Hatırlatma',
-                                value: 'Gelecekte anketlere zamanında yanıt vermeyi unutmayın!',
-                                inline: false
-                            }
-                        ],
-                        timestamp: new Date().toISOString()
-                    }]
-                });
-
-                this.logger.info(`${punishment.username} kullanıcısının cezası kaldırıldı ve bildirim gönderildi`);
-
-            } catch (dmError) {
-                this.logger.error(`${punishment.username} kullanıcısına ceza kaldırma bildirimi gönderilemedi:`, dmError.message);
-            }
-
-            // Log kanalına bildir
-            await this.logPunishmentRemoval(punishment);
-
-        } catch (error) {
-            this.logger.error(`${punishment.username} ceza kaldırma hatası:`, error.message);
-        }
-    }
-
-    // Sistem sağlık kontrolü
     async systemHealthCheck() {
-        try {
-            // Veritabanı bağlantısını kontrol et
-            const isDbHealthy = await this.checkDatabaseHealth();
-            
-            // Discord bağlantısını kontrol et
-            const isDiscordHealthy = this.client.isReady();
-            
-            if (!isDbHealthy || !isDiscordHealthy) {
-                this.logger.error(`Sistem sağlık kontrolü: DB=${isDbHealthy}, Discord=${isDiscordHealthy}`);
-                
-                // Kritik hata durumunda admin kanalına bildir
-                await this.alertSystemHealth(isDbHealthy, isDiscordHealthy);
-            }
+        const isDbHealthy = await this.checkDatabaseHealth();
+        const isDiscordHealthy = this.client.isReady();
+        if (isDbHealthy && isDiscordHealthy) return;
 
-        } catch (error) {
-            this.logger.error('Sistem sağlık kontrolü hatası:', error.message);
-        }
+        this.logger.error(`Sistem sağlık kontrolü başarısız: DB=${isDbHealthy}, Discord=${isDiscordHealthy}`);
+
+        // Aynı arıza sürerken admin kanalını 30 dakikadan sık uyarmayalım.
+        if (Date.now() - this.lastHealthAlertAt < 30 * 60 * 1000) return;
+        this.lastHealthAlertAt = Date.now();
+        await this.alertSystemHealth(isDbHealthy, isDiscordHealthy);
     }
 
-    // Veritabanı sağlığını kontrol et
     async checkDatabaseHealth() {
         try {
             await this.database.getActiveModerators();
             return true;
-        } catch (error) {
+        } catch {
             return false;
         }
     }
 
-    // Sistem sağlık uyarısı gönder
     async alertSystemHealth(isDbHealthy, isDiscordHealthy) {
         try {
-            const adminChannelId = this.config.discord.adminModChannelId;
-            if (!adminChannelId) return;
-
-            const channel = await this.client.channels.fetch(adminChannelId);
-            
-            const embed = {
-                color: 0xff0000,
-                title: '🚨 Sistem Sağlık Uyarısı',
-                description: 'Otomatik takvim sisteminde sorun tespit edildi!',
-                fields: [
-                    {
-                        name: '💾 Veritabanı',
-                        value: isDbHealthy ? '✅ Sağlıklı' : '❌ Sorunlu',
-                        inline: true
-                    },
-                    {
-                        name: '🤖 Discord Bağlantısı',
-                        value: isDiscordHealthy ? '✅ Sağlıklı' : '❌ Sorunlu',
-                        inline: true
-                    },
-                    {
-                        name: '⚠️ Öneri',
-                        value: 'Sistem yöneticisine başvurun ve botu yeniden başlatmayı deneyin.',
-                        inline: false
-                    }
-                ],
-                timestamp: new Date().toISOString()
-            };
-
-            await channel.send({ embeds: [embed] });
-
+            const channelId = this.config.discord.adminModChannelId;
+            if (!channelId || !this.client.isReady()) return;
+            const channel = await this.client.channels.fetch(channelId);
+            if (!channel?.isTextBased?.()) return;
+            await channel.send(
+                `🚨 **Sistem sağlık uyarısı**\nVeritabanı: ${isDbHealthy ? '✅' : '❌'}\nDiscord: ${isDiscordHealthy ? '✅' : '❌'}`
+            );
         } catch (error) {
-            this.logger.error('Sistem sağlık uyarısı gönderme hatası:', error.message);
+            this.logger.warn(`Sistem sağlık uyarısı gönderilemedi: ${error.message}`);
         }
     }
 
-    // Takvim oluşturma logla
-    async logScheduleCreation(date, description, success, error = null) {
-        try {
-            const logChannelId = this.config.discord.logChannelId;
-            if (!logChannelId) return;
-
-            const channel = await this.client.channels.fetch(logChannelId);
-            
-            const embed = {
-                color: success ? 0x00ff00 : 0xff0000,
-                title: success ? '✅ Otomatik Takvim Oluşturuldu' : '❌ Otomatik Takvim Hatası',
-                fields: [
-                    {
-                        name: '📅 Tarih',
-                        value: `${description} (${date})`,
-                        inline: true
-                    },
-                    {
-                        name: '🕒 Zaman',
-                        value: new Date().toLocaleString('tr-TR'),
-                        inline: true
-                    }
-                ],
-                timestamp: new Date().toISOString()
-            };
-
-            if (success) {
-                embed.description = 'Sistem otomatik olarak günlük takvim oluşturdu ve moderatörlere anket gönderdi.';
-                embed.fields.push({
-                    name: '📊 Durum',
-                    value: 'Moderatörlere 5 saat süre verildi',
-                    inline: false
-                });
-            } else {
-                embed.description = 'Otomatik takvim oluşturulurken hata oluştu!';
-                embed.fields.push({
-                    name: '❌ Hata',
-                    value: error || 'Bilinmeyen hata',
-                    inline: false
-                });
-            }
-
-            await channel.send({ embeds: [embed] });
-
-        } catch (logError) {
-            this.logger.error('Takvim oluşturma loglama hatası:', logError.message);
-        }
-    }
-
-    // Ceza kaldırma logla
-    async logPunishmentRemoval(punishment) {
-        try {
-            const logChannelId = this.config.discord.logChannelId;
-            if (!logChannelId) return;
-
-            const channel = await this.client.channels.fetch(logChannelId);
-            
-            let punishmentText;
-            switch (punishment.punishment_type) {
-                case 'ban_2day':
-                    punishmentText = '2 Gün Moderatörlük Yasağı';
-                    break;
-                case 'ban_1hour':
-                    punishmentText = '1 Saat Yazma Yasağı';
-                    break;
-                case 'ban_1day':
-                    punishmentText = '1 Gün Moderatörlük Yasağı';
-                    break;
-                default:
-                    punishmentText = punishment.punishment_type;
-            }
-
-            const embed = {
-                color: 0x00ff00,
-                title: '✅ Ceza Süresi Doldu',
-                description: 'Kullanıcının ceza süresi otomatik olarak sona erdi.',
-                fields: [
-                    {
-                        name: '👤 Kullanıcı',
-                        value: `${punishment.username} <@${punishment.user_id}>`,
-                        inline: true
-                    },
-                    {
-                        name: '⏰ Ceza Türü',
-                        value: punishmentText,
-                        inline: true
-                    },
-                    {
-                        name: '📝 Sebep',
-                        value: punishment.reason === 'no_response' ? 'Ankete yanıt vermeme' : punishment.reason,
-                        inline: true
-                    },
-                    {
-                        name: '📅 Ceza Tarihi',
-                        value: new Date(punishment.created_at).toLocaleDateString('tr-TR'),
-                        inline: true
-                    },
-                    {
-                        name: '🔢 İhlal Sayısı',
-                        value: punishment.violation_count.toString(),
-                        inline: true
-                    }
-                ],
-                timestamp: new Date().toISOString()
-            };
-
-            await channel.send({ embeds: [embed] });
-
-        } catch (error) {
-            this.logger.error('Ceza kaldırma loglama hatası:', error.message);
-        }
-    }
-
-    // Sistemi durdur
     stop() {
+        for (const task of this.tasks) {
+            try {
+                task.stop();
+                if (typeof task.destroy === 'function') task.destroy();
+            } catch (error) {
+                this.logger.warn(`Cron görevi durdurulamadı: ${error.message}`);
+            }
+        }
+        this.tasks = [];
         this.isRunning = false;
-        this.logger.info('Tam otomatik takvim sistemi durduruldu');
+        this.logger.info('Otomatik takvim sistemi durduruldu.');
     }
 
-    // Durum bilgisi
     getStatus() {
         return {
             isRunning: this.isRunning,
             autoScheduleEnabled: this.config.schedule.autoScheduleEnabled,
             dailyScheduleHour: this.config.schedule.dailyScheduleHour,
-            surveyTimeoutHours: this.config.schedule.surveyTimeoutHours
+            surveyTimeoutHours: this.config.schedule.surveyTimeoutHours,
+            taskCount: this.tasks.length
         };
     }
 }
 
-module.exports = FullyAutomaticScheduler; 
+module.exports = FullyAutomaticScheduler;

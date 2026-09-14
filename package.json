@@ -1,26 +1,49 @@
 {
-  "name": "discord-mod-schedule-bot",
-  "version": "1.0.0",
-  "description": "Discord moderatör çalışma takvimi otomasyonu",
+  "name": "discord-mod-takvimi",
+  "version": "2.2.1",
+  "description": "Discord moderasyon ekipleri için otomatik vardiya, müsaitlik anketi ve iş yükü yönetim botu",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "setup": "node src/setup.js"
+    "setup": "node src/setup.js",
+    "check": "node scripts/check.js",
+    "test": "node --test",
+    "doctor": "node src/doctor.js",
+    "update:check": "node scripts/update-check.js",
+    "verify": "npm run check && npm test",
+    "release:check": "npm run verify"
   },
-  "keywords": ["discord", "bot", "moderator", "schedule", "automation"],
-  "author": "",
+  "keywords": [
+    "discord",
+    "discord-bot",
+    "moderation",
+    "schedule",
+    "shift-scheduling",
+    "automation",
+    "sqlite"
+  ],
+  "author": "Osman İlçektuğ",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/osmanilcektu/discord-mod-takvimi.git"
+  },
+  "bugs": {
+    "url": "https://github.com/osmanilcektu/discord-mod-takvimi/issues"
+  },
+  "homepage": "https://github.com/osmanilcektu/discord-mod-takvimi#readme",
   "dependencies": {
-    "discord.js": "^14.14.1",
-    "sqlite3": "^5.1.6",
-    "node-cron": "^3.0.3",
-    "dotenv": "^16.3.1"
+    "discord.js": "14.27.0",
+    "dotenv": "16.6.1",
+    "node-cron": "4.6.0",
+    "sqlite3": "6.0.1"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2"
+    "nodemon": "3.1.14"
   },
   "engines": {
-    "node": ">=16.0.0"
-  }
-} 
+    "node": ">=20.17.0"
+  },
+  "private": true
+}

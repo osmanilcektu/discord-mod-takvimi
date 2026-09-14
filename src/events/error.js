@@ -1,36 +1,27 @@
+const { EmbedBuilder } = require('discord.js');
+
 module.exports = {
     name: 'error',
     async execute(error, client) {
-        client.logger.botError(error, 'Discord Client Error');
-        
-        // Kritik hatalar için admin kanalına bildir
+        const safeError = error instanceof Error ? error : new Error(String(error));
+        client.logger.botError(safeError, 'Discord Client Error');
+
         try {
-            const adminChannel = client.channels.cache.get(client.config.discord.adminModChannelId);
-            if (adminChannel) {
-                const { EmbedBuilder } = require('discord.js');
-                
-                const embed = new EmbedBuilder()
-                    .setColor('#ff0000')
-                    .setTitle('🚨 Bot Hatası')
-                    .setDescription('Bot\'ta kritik bir hata oluştu.')
-                    .addFields(
-                        {
-                            name: 'Hata Mesajı',
-                            value: error.message.substring(0, 1000),
-                            inline: false
-                        },
-                        {
-                            name: 'Zaman',
-                            value: new Date().toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' }),
-                            inline: true
-                        }
-                    )
-                    .setTimestamp();
-                
-                await adminChannel.send({ embeds: [embed] });
-            }
+            if (!client.isReady()) return;
+            const channelId = client.config.discord.adminModChannelId;
+            const channel = await client.channels.fetch(channelId).catch(() => null);
+            if (!channel?.isTextBased?.()) return;
+
+            const embed = new EmbedBuilder()
+                .setColor('#cc3333')
+                .setTitle('🚨 Discord Client Hatası')
+                .setDescription('Discord istemcisinde bir hata oluştu. Ayrıntılar sunucu loglarına kaydedildi.')
+                .addFields({ name: 'Hata', value: (safeError.message || 'Bilinmeyen hata').slice(0, 1000) })
+                .setTimestamp();
+
+            await channel.send({ embeds: [embed] });
         } catch (notificationError) {
-            client.logger.error('Admin kanalına hata bildirimi gönderilemedi:', notificationError.message);
+            client.logger.warn(`Admin kanalına hata bildirimi gönderilemedi: ${notificationError.message}`);
         }
     }
-}; 
+};

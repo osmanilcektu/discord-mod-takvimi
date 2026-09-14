@@ -1,0 +1,38 @@
+name: Bug report
+description: Çalışma hatası veya beklenmeyen davranış bildirin
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Sorun
+      description: Hatanın ne olduğunu ve beklenen davranışı açıklayın.
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node.js sürümü
+      placeholder: v20.x
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Bot sürümü
+      placeholder: v2.2.1
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Tekrarlama adımları
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Temizlenmiş log
+      description: Token, kullanıcı verisi veya başka gizli bilgi paylaşmayın.
+      render: shell

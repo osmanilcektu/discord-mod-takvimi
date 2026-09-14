@@ -1,62 +1,96 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { buildSlots } = require('../utils/slots');
+const {
+    deferEphemeral,
+    isExpiredInteractionError,
+    safeEphemeralReply
+} = require('../utils/interaction');
+const packageJson = require('../../package.json');
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('yardim')
-        .setDescription('Bot komutları hakkında yardım alın'),
+        .setDescription('Bot komutları ve otomatik vardiya sistemi hakkında yardım gösterir'),
 
-    async execute(interaction) {
+    async execute(interaction, client) {
         try {
+            const acknowledged = await deferEphemeral(interaction);
+            if (!acknowledged) {
+                client.logger.warn('Yardım komutu yanıtlanamadan interaction süresi doldu.');
+                return;
+            }
+
+            const slots = buildSlots(client.config.timeSlots)
+                .map(slot => `${slot.emoji} **${slot.id}** — ${slot.range}`)
+                .join('\n');
+
+            const scheduler = client.automaticScheduler?.getStatus();
+            const schedulerText = scheduler?.autoScheduleEnabled
+                ? `Aktif • günlük anket saati ${String(scheduler.dailyScheduleHour).padStart(2, '0')}:00 • yanıt süresi ${scheduler.surveyTimeoutHours} saat`
+                : 'Devre dışı';
+
             const helpEmbed = new EmbedBuilder()
-                .setTitle('🤖 MOD TAKVİM BOT - YARDIM')
-                .setDescription('**Moderatör takvimi ve vardiya yönetimi için bot komutları:**')
+                .setTitle('🤖 Discord Moderatör Takvim Botu')
+                .setDescription('Moderatör vardiyalarını, müsaitlik anketlerini ve iş yükünü yönetir.')
                 .setColor('#0099ff')
-                .setThumbnail(interaction.client.user.displayAvatarURL())
                 .addFields(
                     {
-                        name: '👥 `/mod`',
-                        value: '• **Açıklama:** Şu anda aktif olan moderatörleri gösterir\n• **Kullanım:** `/mod`\n• **Kim kullanabilir:** Herkes',
+                        name: '👥 /mod',
+                        value: 'Şu an aktif vardiyayı/moderatörü ve sıradaki vardiyayı gösterir.',
                         inline: false
                     },
                     {
-                        name: '⚙️ `/admin`',
-                        value: '• **Açıklama:** Yönetici komutları (takvim, vardiya, kısıtlama yönetimi)\n• **Alt Komutlar:**\n  ├ `takvim yayinla` - Haftalık takvimi yayınla\n  ├ `gunluk sec` - Günlük mod seçimi\n  ├ `gunluk ata` - Manuel mod atama\n  ├ `gunluk gor` - Günlük atamayı görüntüle\n  ├ `kisitlama ayarla` - Mod kısıtlaması ayarla\n  ├ `kisitlama listele` - Kısıtlamaları listele\n  ├ `kisitlama temizle` - Kısıtlamaları temizle\n  └ `yetkiler` - Bot yetkilerini kontrol et\n• **Kim kullanabilir:** Sadece Yöneticiler',
+                        name: '⚙️ /admin',
+                        value: [
+                            '`takvim-olustur` — günlük anket başlat',
+                            '`kullanici-izin` — saat bazlı izin/kısıtlama',
+                            '`kalici-saat` — kalıcı vardiya tanımla',
+                            '`saat-degistir` — atanmış vardiyayı değiştir',
+                            '`mod-ekle` / `modlari-guncelle` — moderatör yönetimi',
+                            '`takvim-gonder` — haftalık müsaitlik anketi gönder',
+                            '`takvim-yayinla` — haftalık müsaitlik özetini yayınla',
+                            '`takvim-sil` — günlük atamaları sil',
+                            '`cezali-listesi` / `ban-kaldir` — planlama cezası yönetimi',
+                            '`stats` / `permissions` / `workload` — temel sistem durumu',
+                            '`sistem-durumu` — ayrıntılı sağlık ve güncelleme raporu',
+                            '`guncelleme-kontrol` — GitHub Releases sürüm kontrolü',
+                            '`proje-istatistik` — yıldız/fork/release/indirme istatistikleri',
+                            '`rapor-gonder` — özel operasyon kanalına rapor gönder',
+                            '`mod-listesi` — aktif moderatörleri listele'
+                        ].join('\n'),
+                        inline: false
+                    },
+                    {
+                        name: '⏱️ Otomatik Sistem',
+                        value: schedulerText,
+                        inline: false
+                    },
+                    {
+                        name: '🕒 Vardiyalar',
+                        value: slots || 'Tanımlı vardiya yok.',
+                        inline: false
+                    },
+                    {
+                        name: '🔐 Güvenlik',
+                        value: 'Bot tokenını yalnızca `.env` içinde tutun. Token, log veya ekran görüntüsünde paylaşılmamalıdır.',
                         inline: false
                     }
                 )
-                .addFields(
-                    {
-                        name: '🔄 **Otomatik İşlemler**',
-                        value: '• **Haftalık Anket:** Her Pazar 18:00\'da DM gönderilir\n• **Günlük Seçim:** Her gün 07:00\'da otomatik mod seçimi\n• **Takvim Yayını:** Her Pazartesi 09:00\'da haftalık program\n• **Disiplin:** Ankete katılmayanlar otomatik ban',
-                        inline: false
-                    },
-                    {
-                        name: '📋 **Moderatör Rolleri**',
-                        value: '`Moderator`, `Admin`, `Director`, `Founder`',
-                        inline: true
-                    },
-                    {
-                        name: '⏰ **Vardiya Saatleri**',
-                        value: '**Gündüz:** 08:00-20:00\n**Gece:** 20:00-08:00',
-                        inline: true
-                    }
-                )
-                .setFooter({ 
-                    text: 'Bot Versiyon 1.0.0 | Geliştirici: MOD TAKVİM', 
-                    iconURL: interaction.client.user.displayAvatarURL() 
-                })
+                .setFooter({ text: `v${packageJson.version} • Osman İlçektuğ` })
                 .setTimestamp();
 
-            await interaction.reply({ embeds: [helpEmbed], flags: ['Ephemeral'] });
-
+            await interaction.editReply({ embeds: [helpEmbed] });
         } catch (error) {
-            const logger = interaction.client.logger;
-            logger.error('Yardım komutu hatası', error, 'Yardım komut');
+            if (isExpiredInteractionError(error)) {
+                client.logger.warn('Yardım komutu interaction süresi dolduğu için yanıtlanamadı.');
+                return;
+            }
 
-            await interaction.reply({
-                content: '❌ Yardım bilgileri gösterilirken bir hata oluştu.',
-                flags: ['Ephemeral']
-            });
+            client.logger.botError(error, 'Yardım komutu');
+            await safeEphemeralReply(
+                interaction,
+                '❌ Yardım bilgileri gösterilirken bir hata oluştu.'
+            ).catch(() => {});
         }
     }
-}; 
+};
