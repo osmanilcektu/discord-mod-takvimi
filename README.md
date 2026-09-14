@@ -1,67 +1,138 @@
 # Discord Moderatör Takvim Botu
 
-Bu bot, Discord sunucusundaki moderatörlerin çalışma takvimini otomatik olarak yönetir.
+Discord sunucularındaki moderasyon ekiplerinin vardiya ve çalışma takvimlerini otomatik olarak yönetmek için geliştirilmiş açık kaynaklı Discord botu.
 
-## 🚀 Yeni Özellikler (v2.0)
+Otomatik vardiya oluşturma, moderatör anketleri, çalışma yükü dengeleme, kalıcı vardiyalar, devamsızlık takibi ve yönetim komutlarını tek sistem altında toplar.
 
-### ✨ Tam Otomatik Sistem
-- **Otomatik takvim oluşturma**: Her gün saat 8:00'de otomatik olarak takvim kontrolü yapar
-- **Akıllı anket sistemi**: Takvim yoksa otomatik anket gönderir
-- **5 saat süre**: Moderatörlere 5 saat yanıt süresi verir
-- **Otomatik ceza sistemi**: Yanıt vermeyenleri otomatik cezalandırır
-- **Yerine atama**: Gelmeyenler için otomatik yerine moderatör atar
+> Proje Node.js, JavaScript ve SQLite kullanılarak geliştirilmiştir.
 
-### 🎯 Birleştirilmiş Admin Komutları
-Tüm admin komutları `/admin` altında birleştirildi:
+---
 
-- `/admin takvim-olustur` - Günlük takvim oluştur
-- `/admin kullanici-izin` - Kullanıcıya özel izin/kısıtlama
-- `/admin kalici-saat` - Kalıcı vardiya atama (bot her zaman aynı saate atar)
-- `/admin saat-degistir` - Kullanıcının saatini değiştir (DM ile bildirir)
-- `/admin mod-ekle` - Sisteme yeni moderatör ekle
-- `/admin modlari-guncelle` - Tüm moderatörleri tara ve güncelle
-- `/admin takvim-gonder` - Moderatörlere anket gönder
-- `/admin takvim-sil` - Belirtilen tarihin takvimini sil
-- `/admin cezali-listesi` - Cezalı kullanıcıları listele
-- `/admin ban-kaldir` - Kullanıcının banını kaldır
-- `/admin stats` - Bot istatistikleri
-- `/admin permissions` - Bot yetkilerini kontrol et
+## Özellikler
 
-### 📊 Gelişmiş Ceza Sistemi
-1. **İlk ihlal**: 2 gün moderatörlük yasağı
-2. **İkinci ihlal**: 1 saat yazma yasağı
-3. **Üçüncü+ ihlal**: 1 gün moderatörlük yasağı
+### Otomatik Takvim Sistemi
 
-### 📱 Ayrı Kanal Sistemi
-- **Log Kanalı**: Sistem logları (kullanıcı geldi/gelmedi, cezalar vs)
-- **Takvim Kanalı**: Moderatörlerin görebileceği takvim listesi
-- **Admin Kanalı**: Admin bildirimleri
+- Günlük takvim kontrolü
+- Otomatik moderatör anketleri
+- Yapılandırılabilir anket süresi
+- Moderatör uygunluk kontrolü
+- Otomatik vardiya oluşturma
+- Eksik moderatörler için yerine atama
+- Moderatör çalışma yükünün dengelenmesi
+- Son çalışma durumlarına göre rotasyon
 
-## 📋 Kurulum
+### Moderatör Yönetimi
 
-### 1. Gereksinimler
-- Node.js 16+
+- Moderatör ekleme
+- Moderatör listesini güncelleme
+- Kalıcı vardiya tanımlama
+- Kullanıcı bazlı zaman izinleri
+- Manuel vardiya değiştirme
+- Devamsızlık takibi
+- Moderatör iş yükü analizi
+
+### Otomatik Bildirimler
+
+- Discord kanal bildirimleri
+- Moderatörlere DM bildirimleri
+- Yönetici bildirimleri
+- Sistem ve hata logları
+- Takvim yayınlama sistemi
+
+### Ceza Sistemi
+
+Varsayılan yapılandırmada:
+
+1. İlk ihlal → 2 gün moderatörlük kısıtlaması
+2. İkinci ihlal → 1 saat yazma kısıtlaması
+3. Üçüncü ve sonraki ihlaller → 1 gün moderatörlük kısıtlaması
+
+Bu değerler `.env` üzerinden yapılandırılabilir.
+
+---
+
+## Admin Komutları
+
+Yönetim komutları `/admin` altında toplanmıştır.
+
+| Komut | Açıklama |
+| --- | --- |
+| `/admin takvim-olustur` | Günlük takvim oluşturur |
+| `/admin kullanici-izin` | Kullanıcıya özel izin veya kısıtlama tanımlar |
+| `/admin kalici-saat` | Moderatöre kalıcı vardiya atar |
+| `/admin saat-degistir` | Kullanıcının vardiyasını değiştirir |
+| `/admin mod-ekle` | Sisteme moderatör ekler |
+| `/admin modlari-guncelle` | Moderatör listesini günceller |
+| `/admin takvim-gonder` | Moderatörlere takvim anketi gönderir |
+| `/admin takvim-sil` | Belirtilen tarihin takvimini siler |
+| `/admin cezali-listesi` | Kısıtlanan kullanıcıları listeler |
+| `/admin ban-kaldir` | Kullanıcının kısıtlamasını kaldırır |
+| `/admin stats` | Bot istatistiklerini görüntüler |
+| `/admin permissions` | Bot izinlerini kontrol eder |
+
+---
+
+## Sistem Nasıl Çalışır?
+
+Varsayılan otomatik süreç:
+
+1. Bot belirlenen saatte günlük takvim durumunu kontrol eder.
+2. Takvim oluşturulmamışsa moderatörlere otomatik anket gönderilir.
+3. Moderatörlerin yanıt vermesi için belirlenen süre beklenir.
+4. Yanıtlar ve moderatör uygunlukları değerlendirilir.
+5. Uygun moderatörler vardiyalara atanır.
+6. Yanıt vermeyen kullanıcılar yapılandırılmış kurallara göre işlenir.
+7. Gerektiğinde alternatif moderatör atanır.
+8. Oluşturulan takvim Discord kanalında yayınlanır.
+9. İlgili kullanıcılara DM bildirimi gönderilir.
+
+---
+
+## Gereksinimler
+
+- Node.js 16 veya üzeri
+- npm
 - Discord Bot Token
-- Ubuntu/Linux (önerilen)
+- Discord sunucusu
+- SQLite
+- Linux / Ubuntu önerilir
 
-### 2. Kurulum Adımları
+> Proje ağırlıklı olarak Ubuntu/Linux ortamında kullanılmıştır. Diğer işletim sistemlerinde davranış farklılıkları olabilir.
+
+---
+
+## Kurulum
+
+### 1. Repository'yi klonlayın
 
 ```bash
-# Projeyi klonla
-git clone <repo-url>
-cd discord-mod-schedule-bot
+git clone https://github.com/osmanilcektu/discord-mod-takvimi.git
+cd discord-mod-takvimi
+```
 
-# Bağımlılıkları yükle
+### 2. Bağımlılıkları yükleyin
+
+```bash
 npm install
+```
 
-# Konfigürasyon dosyasını kopyala
+### 3. Ortam dosyasını oluşturun
+
+```bash
 cp config.example.env .env
+```
 
-# Konfigürasyonu düzenle
+Ardından `.env` dosyasını düzenleyin:
+
+```bash
 nano .env
 ```
 
-### 3. Konfigürasyon (.env)
+---
+
+## Yapılandırma
+
+Örnek `.env`:
 
 ```env
 # Discord Bot Token
@@ -70,7 +141,7 @@ DISCORD_TOKEN=your_bot_token_here
 # Discord Server ID
 GUILD_ID=your_server_id_here
 
-# Kanallar (ayrı kanallar için)
+# Kanallar
 ADMIN_MOD_CHANNEL_ID=your_admin_channel_id
 LOG_CHANNEL_ID=your_log_channel_id
 SCHEDULE_CHANNEL_ID=your_schedule_channel_id
@@ -91,103 +162,330 @@ THIRD_VIOLATION_DAYS=1
 WRITE_TIMEOUT_MINUTES=60
 ```
 
-### 4. Botu Başlat
+### Güvenlik
 
-```bash
-# Veritabanını kurulum
-npm run setup
+Gerçek Discord Bot Token'ınızı hiçbir zaman repository'ye göndermeyin.
 
-# Botu başlat
-npm start
+`.env` dosyası Git tarafından takip edilmemelidir.
 
-# Geliştirme modu
-npm run dev
+Yalnızca örnek yapılandırma dosyası olan:
+
+```text
+config.example.env
 ```
 
-## 🔧 Sistem Nasıl Çalışır?
+repository içerisinde tutulmalıdır.
 
-### Otomatik Takvim Süreci:
-1. **Her gün saat 8:00**: Bot bugün ve yarın için takvim var mı kontrol eder
-2. **Takvim yoksa**: Otomatik olarak tüm moderatörlere anket gönderir
-3. **5 saat süre**: Moderatörler 5 saat içinde yanıt vermeli
-4. **Süre dolunca**: 
-   - Yanıt vermeyenler otomatik cezalandırılır
-   - Yerine başka moderatör atanır
-   - Takvim otomatik oluşturulur ve yayınlanır
-
-### Ceza Sistemi:
-- **1. İhlal**: 2 gün moderatörlük yapamaz
-- **2. İhlal**: 1 saat hiçbir yere yazamaz (yazma banı)
-- **3. İhlal**: 1 gün moderatörlük yapamaz
-- **Ceza bitince**: Otomatik kaldırılır ve DM ile bildirilir
-
-### Özel Özellikler:
-- **Kalıcı vardiya**: Admin bir kullanıcıya kalıcı saat atayabilir
-- **Zaman kısıtlamaları**: Belirli saatlerde çalışma izni/yasağı
-- **Manuel değişiklik**: Admin istediği zaman saatleri değiştirebilir
-- **Otomatik bildirimler**: Tüm değişiklikler DM ile bildirilir
-
-## 📊 Veritabanı Tabloları
-
-Sistem aşağıdaki tabloları kullanır:
-- `moderators` - Moderatör bilgileri
-- `daily_assignments` - Günlük vardiya atamaları
-- `mod_responses` - Anket yanıtları
-- `absent_users` - Cezalı kullanıcılar (gelmeyen tablosu)
-- `permanent_shifts` - Kalıcı vardiya atamaları
-- `user_time_permissions` - Kullanıcı zaman izinleri
-- `schedule_status` - Otomatik takvim durumu
-
-## 🚨 Önemli Notlar
-
-1. **Ubuntu'da çalışır**: Sistem Ubuntu/Linux ortamında test edilmiştir
-2. **Otomatik başlatma**: Sistem reboot sonrası otomatik çalışır
-3. **Hata yönetimi**: Tüm hatalar log kanalına bildirilir
-4. **Yedekleme**: Veritabanını düzenli yedekleyin
-5. **Bot yetkileri**: Botun DM gönderme ve kanal mesaj atma yetkisi olmalı
-
-## 🔧 Sorun Giderme
-
-### Bot çalışmıyor:
-```bash
-# Logları kontrol et
-tail -f logs/bot.log
-
-# Veritabanını kontrol et
-sqlite3 data/bot.db ".tables"
-
-# Botu yeniden başlat
-npm restart
-```
-
-### Anket gönderilmiyor:
-- Bot yetkilerini kontrol edin
-- DM ayarlarını kontrol edin
-- Log kanalını kontrol edin
-
-### Otomatik sistem çalışmıyor:
-- `AUTO_SCHEDULE_ENABLED=true` olduğundan emin olun
-- Cron job'ların çalıştığını kontrol edin
-- Sistem saatini kontrol edin
-
-## 📝 Changelog
-
-### v2.0 - Tam Otomatik Sistem
-- ✅ Tüm komutları `/admin` altında birleştirme
-- ✅ Otomatik takvim oluşturma sistemi
-- ✅ 5 saatlik anket süresi
-- ✅ Otomatik ceza sistemi (2 gün → 1 saat → 1 gün)
-- ✅ Gelmeyen kullanıcılar tablosu
-- ✅ Ayrı log ve takvim kanalları
-- ✅ DM bildirim sistemi
-- ✅ Kalıcı vardiya ataması
-- ✅ Kullanıcı zaman izinleri
-- ✅ Otomatik yerine atama sistemi
-
-## 📞 Destek
-
-Sorunlarınız için GitHub Issues kullanın veya Discord'dan iletişime geçin.
+Bir token yanlışlıkla GitHub'a gönderildiyse yalnızca dosyayı silmek yeterli değildir. İlgili token Discord Developer Portal üzerinden iptal edilmeli ve yenisi oluşturulmalıdır.
 
 ---
 
-**Not**: Bu bot Ubuntu ortamında çalışmak üzere optimize edilmiştir. Diğer işletim sistemlerinde test edilmemiştir. 
+## Botu Başlatma
+
+Veritabanı kurulumunu çalıştırın:
+
+```bash
+npm run setup
+```
+
+Botu başlatın:
+
+```bash
+npm start
+```
+
+Geliştirme modu:
+
+```bash
+npm run dev
+```
+
+---
+
+## Veritabanı
+
+Proje SQLite kullanır.
+
+Sistemde kullanılan temel tablolar:
+
+| Tablo | Amaç |
+| --- | --- |
+| `moderators` | Moderatör bilgileri |
+| `daily_assignments` | Günlük vardiya atamaları |
+| `mod_responses` | Moderatör anket yanıtları |
+| `absent_users` | Devamsızlık ve kısıtlama kayıtları |
+| `permanent_shifts` | Kalıcı vardiyalar |
+| `user_time_permissions` | Kullanıcı zaman izinleri |
+| `schedule_status` | Otomatik takvim durumu |
+
+Veritabanı dosyalarının düzenli olarak yedeklenmesi önerilir.
+
+---
+
+## Kanal Yapısı
+
+Bot farklı görevler için ayrı Discord kanalları kullanabilir.
+
+### Admin Kanalı
+
+Yönetim işlemleri ve yönetici bildirimleri.
+
+### Log Kanalı
+
+- Sistem olayları
+- Kullanıcı hareketleri
+- Devamsızlıklar
+- Cezalar
+- Hatalar
+
+### Takvim Kanalı
+
+Oluşturulan moderatör vardiyalarının yayınlandığı kanal.
+
+---
+
+## Kalıcı Vardiyalar
+
+Yöneticiler belirli moderatörlere kalıcı vardiya atayabilir.
+
+Bu özellik, belirli saatlerde düzenli çalışan ekip üyelerinin otomatik planlama sırasında aynı zaman diliminde tutulmasını sağlar.
+
+---
+
+## Zaman Kısıtlamaları
+
+Kullanıcı bazında belirli saatlerde:
+
+- Çalışma izni
+- Çalışma kısıtlaması
+- Kalıcı vardiya
+
+tanımlanabilir.
+
+Bu bilgiler otomatik takvim oluşturulurken dikkate alınır.
+
+---
+
+## Sorun Giderme
+
+### Bot çalışmıyorsa
+
+Logları kontrol edin:
+
+```bash
+tail -f logs/bot.log
+```
+
+Veritabanını kontrol edin:
+
+```bash
+sqlite3 data/bot.db ".tables"
+```
+
+Bağımlılıkları yeniden yüklemek için:
+
+```bash
+npm install
+```
+
+### Anket gönderilmiyorsa
+
+Şunları kontrol edin:
+
+- Discord Bot Token
+- Botun sunucu izinleri
+- Kanal ID'leri
+- Moderatör rollerinin isimleri
+- DM izinleri
+- Log çıktıları
+
+### Otomatik sistem çalışmıyorsa
+
+`.env` içerisinde:
+
+```env
+AUTO_SCHEDULE_ENABLED=true
+```
+
+olduğunu doğrulayın.
+
+Ayrıca:
+
+- Sistem saatini
+- Sunucu saat dilimini
+- Bot prosesini
+- Log dosyalarını
+
+kontrol edin.
+
+---
+
+## Proje Yapısı
+
+Repository'nin temel yapısı:
+
+```text
+discord-mod-takvimi/
+├── src/
+├── .gitignore
+├── config.example.env
+├── package.json
+├── README.md
+└── LICENSE
+```
+
+`src/` dizini botun uygulama kaynak kodunu içerir.
+
+---
+
+## Güvenlik
+
+Repository üzerinde:
+
+- GitHub Secret Scanning
+- Push Protection
+- Dependabot
+- CodeQL
+- GitHub Security Advisories
+
+gibi GitHub güvenlik özelliklerinin kullanılması önerilir.
+
+Bir güvenlik açığı tespit ederseniz mümkünse hassas ayrıntıları herkese açık bir Issue içerisinde paylaşmayın.
+
+Repository'nin **Security** bölümündeki özel güvenlik bildirim mekanizmasını kullanın.
+
+---
+
+## Katkıda Bulunma
+
+Katkılar açıktır.
+
+Katkıda bulunmak için:
+
+1. Repository'yi fork edin.
+2. Yeni bir branch oluşturun.
+3. Değişikliğinizi yapın.
+4. Değişikliğinizi test edin.
+5. Açıklayıcı bir commit oluşturun.
+6. Pull Request gönderin.
+
+Örnek:
+
+```bash
+git checkout -b fix/scheduler-rotation
+```
+
+Commit:
+
+```bash
+git commit -m "Fix moderator rotation logic"
+```
+
+Push:
+
+```bash
+git push origin fix/scheduler-rotation
+```
+
+Ardından GitHub üzerinden Pull Request oluşturabilirsiniz.
+
+Katkılar özellikle şu alanlarda değerlidir:
+
+- Hata düzeltmeleri
+- Takvim algoritması geliştirmeleri
+- Discord.js uyumluluk güncellemeleri
+- Veritabanı iyileştirmeleri
+- Testler
+- Dokümantasyon
+- Güvenlik geliştirmeleri
+- Yeni özellikler
+
+---
+
+## Issue Bildirimi
+
+Hata veya özellik talebi için:
+
+[GitHub Issues](https://github.com/osmanilcektu/discord-mod-takvimi/issues)
+
+Hata bildirirken mümkünse şunları ekleyin:
+
+- Node.js sürümü
+- İşletim sistemi
+- Hatanın açıklaması
+- Hatanın nasıl tekrarlandığı
+- İlgili log çıktısı
+- Beklenen davranış
+- Gerçekleşen davranış
+
+> Token, kullanıcı bilgisi veya başka gizli verileri Issue içine eklemeyin.
+
+---
+
+## Sürüm
+
+Mevcut proje sürümü:
+
+```text
+v2.0
+```
+
+v2.0 ile öne çıkan değişiklikler:
+
+- Birleştirilmiş `/admin` komut sistemi
+- Otomatik takvim oluşturma
+- Moderatör anket sistemi
+- Otomatik ceza sistemi
+- Devamsızlık takibi
+- Ayrı log ve takvim kanalları
+- DM bildirim sistemi
+- Kalıcı vardiyalar
+- Kullanıcı zaman izinleri
+- Otomatik yerine atama
+- Moderatör çalışma yükü dengeleme
+
+---
+
+## Roadmap
+
+Planlanan geliştirmeler:
+
+- Test kapsamının artırılması
+- CI kontrollerinin geliştirilmesi
+- Yeni Discord.js sürümleriyle uyumluluk
+- Takvim algoritmasının geliştirilmesi
+- Daha ayrıntılı hata yönetimi
+- Yapılandırma doğrulamalarının geliştirilmesi
+- Dokümantasyonun genişletilmesi
+
+---
+
+## Lisans
+
+Bu proje [MIT License](LICENSE) altında açık kaynak olarak yayınlanmaktadır.
+
+```text
+Copyright (c) 2026 Osman İlçektuğ
+```
+
+MIT lisansı kapsamında projeyi kullanabilir, değiştirebilir ve dağıtabilirsiniz. Lisans ve telif hakkı bildiriminin korunması gerekir.
+
+---
+
+## Proje Sahibi
+
+**Osman İlçektuğ**
+
+GitHub:  
+https://github.com/osmanilcektu
+
+Website:  
+https://osmanilcektu.com
+
+---
+
+## Destek
+
+Projeyi faydalı bulduysanız GitHub üzerinden yıldız verebilirsiniz.
+
+Hata bildirimleri, öneriler ve Pull Request'ler projenin geliştirilmesine katkı sağlar.
