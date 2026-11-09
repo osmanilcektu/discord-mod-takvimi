@@ -34,8 +34,8 @@
   },
   "homepage": "https://github.com/osmanilcektu/discord-mod-takvimi#readme",
   "dependencies": {
-    "discord.js": "14.27.0",
-    "dotenv": "16.6.1",
+    "discord.js": "14.28.1",
+    "dotenv": "18.0.9",
     "node-cron": "4.6.0",
     "sqlite3": "6.0.1"
   },
